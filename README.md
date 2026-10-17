@@ -311,6 +311,7 @@ mcp-sentinel ui
   * `[1]` / `[2]` / `[3]`: Quick jump to Secrets Vault, Permissions, or System Status
   * `[a]`: Add new secret to OS Keyring
   * `[v]`: Reveal selected secret value in modal dialog
+  * `[e]`: Edit / update selected secret value
   * `[d]` / `[Delete]`: Delete secret or revoke permission
   * `[r]`: Reload from OS Vault
   * `[x]`: Reset all permissions

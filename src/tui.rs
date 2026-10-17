@@ -71,6 +71,10 @@ pub enum ModalState {
         key: String,
         value: String,
     },
+    UpdateSecret {
+        key: String,
+        value: String,
+    },
 }
 
 pub struct App {
@@ -253,6 +257,18 @@ impl App {
         if let Some(i) = self.secrets_state.selected() {
             if let Some(key_name) = self.secrets.get(i) {
                 self.modal = ModalState::ConfirmDeleteSecret(key_name.clone());
+            }
+        }
+    }
+
+    pub fn open_update_modal(&mut self) {
+        if let Some(i) = self.secrets_state.selected() {
+            if let Some(key_name) = self.secrets.get(i) {
+                let current_val = vault::get_secret(key_name).unwrap_or_default();
+                self.modal = ModalState::UpdateSecret {
+                    key: key_name.clone(),
+                    value: current_val,
+                };
             }
         }
     }
@@ -474,6 +490,39 @@ fn main_loop<B: ratatui::backend::Backend>(
                         _ => {}
                     },
 
+                    ModalState::UpdateSecret { key: k, value: v } => match key.code {
+                        KeyCode::Esc => {
+                            app.modal = ModalState::None;
+                            app.status_message =
+                                Some(("Update secret cancelled.".to_string(), Color::DarkGray));
+                        }
+                        KeyCode::Enter => {
+                            let key_name = k.clone();
+                            let val_trimmed = v.trim().to_string();
+                            match vault::set_secret(&key_name, &val_trimmed) {
+                                Ok(_) => {
+                                    app.reload_secrets();
+                                    app.modal = ModalState::None;
+                                    app.status_message = Some((
+                                        format!("✓ Secret '{}' updated successfully!", key_name),
+                                        Color::Green,
+                                    ));
+                                }
+                                Err(e) => {
+                                    app.status_message =
+                                        Some((format!("Error updating secret: {}", e), Color::Red));
+                                }
+                            }
+                        }
+                        KeyCode::Backspace => {
+                            v.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            v.push(c);
+                        }
+                        _ => {}
+                    },
+
                     ModalState::None => {
                         // Global shortcuts
                         match key.code {
@@ -595,6 +644,9 @@ fn main_loop<B: ratatui::backend::Backend>(
                                 },
                                 KeyCode::Char('v') if app.current_tab == AppTab::Secrets => {
                                     app.open_reveal_modal();
+                                }
+                                KeyCode::Char('e') if app.current_tab == AppTab::Secrets => {
+                                    app.open_update_modal();
                                 }
                                 KeyCode::Char('d') | KeyCode::Delete => match app.current_tab {
                                     AppTab::Secrets => app.open_delete_modal(),
@@ -884,6 +936,16 @@ fn render_secrets_tab(f: &mut Frame, app: &mut App, area: Rect) {
                 ]),
                 Line::from(vec![
                     Span::styled(
+                        " [e] ",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .bg(Color::Rgb(30, 41, 59))
+                            .bold(),
+                    ),
+                    Span::raw(" Edit / Update Secret Value"),
+                ]),
+                Line::from(vec![
+                    Span::styled(
                         " [Delete / d] ",
                         Style::default()
                             .fg(Color::Red)
@@ -1140,7 +1202,9 @@ fn render_footer(f: &mut Frame, app: &mut App, area: Rect) {
     let tips = match app.focus {
         FocusArea::Sidebar => "[Up/Down] Menu  [Enter] Select  [Right/Tab] Enter View  [q] Quit",
         FocusArea::Content => match app.current_tab {
-            AppTab::Secrets => "[Up/Down] Select  [Enter/v] Reveal  [d] Delete  [Left/Esc] Menu",
+            AppTab::Secrets => {
+                "[Up/Down] Select  [Enter/v] Reveal  [e] Edit  [d] Delete  [Left/Esc] Menu"
+            }
             AppTab::Permissions => "[Up/Down] Select  [Enter/d] Revoke  [x] Reset  [Left/Esc] Menu",
             AppTab::System => "[Left/Esc] Back to Menu  [q] Quit",
         },
@@ -1399,6 +1463,59 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
             .wrap(Wrap { trim: true });
 
             f.render_widget(p, inner);
+        }
+
+        ModalState::UpdateSecret { key, value } => {
+            let popup_area = centered_rect_exact(68, 12, area);
+            f.render_widget(Clear, popup_area);
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .style(modal_bg)
+                .title(Span::styled(
+                    format!(" [ Update Secret: {} ] ", key),
+                    Style::default().fg(Color::Cyan).bold(),
+                ));
+
+            let inner_area = block.inner(popup_area);
+            f.render_widget(block, popup_area);
+
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1), // Hint
+                    Constraint::Length(1), // Spacer
+                    Constraint::Length(3), // Value Input
+                    Constraint::Length(1), // Spacer
+                    Constraint::Length(1), // Actions
+                ])
+                .split(inner_area);
+
+            let hint = Paragraph::new(vec![Line::from(vec![
+                Span::raw("Update secret value in OS Vault for: "),
+                Span::styled(key, Style::default().fg(Color::Cyan).bold()),
+            ])])
+            .style(modal_bg);
+            f.render_widget(hint, chunks[0]);
+
+            let val_block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(" New Secret Value ")
+                .style(Style::default().fg(Color::Yellow).bold());
+            let display_val = format!("{}_", value);
+            let p_val = Paragraph::new(display_val).block(val_block).style(modal_bg);
+            f.render_widget(p_val, chunks[2]);
+
+            let actions = Paragraph::new(vec![Line::from(vec![
+                Span::styled("[Enter] ", Style::default().fg(Color::Green).bold()),
+                Span::raw("Save / Update  |  "),
+                Span::styled("[Esc] ", Style::default().fg(Color::Red).bold()),
+                Span::raw("Cancel"),
+            ])])
+            .style(modal_bg);
+            f.render_widget(actions, chunks[4]);
         }
     }
 }
