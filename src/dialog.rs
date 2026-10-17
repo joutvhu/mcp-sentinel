@@ -28,11 +28,38 @@ pub fn sanitize_dialog_text(text: &str, max_len: usize) -> String {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthDecision {
+    AllowAlways,
+    AllowOnce,
+    Deny,
+}
+
 /// Displays a native OS dialog asking the user whether to grant access to secrets.
+/// Offers three options:
+/// - [Allow Always]: Grants access and records permission in permissions.json for future runs.
+/// - [Allow Once]: Grants access for this execution only (ephemeral; does not save to disk).
+/// - [Deny]: Rejects access and terminates the process.
 /// Includes a 30-second timeout to prevent locking host IDEs/clients indefinitely.
-pub fn ask_user_permission(command_name: &str, secrets: &[String]) -> bool {
+pub fn ask_user_permission(command_name: &str, secrets: &[String]) -> AuthDecision {
+    // Check mock test variable first if present
+    if let Ok(mock) = std::env::var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE") {
+        let mock_lower = mock.trim().to_lowercase();
+        if mock_lower == "allow_once" || mock_lower == "once" {
+            return AuthDecision::AllowOnce;
+        } else if mock_lower == "allow_always"
+            || mock_lower == "always"
+            || mock_lower == "allow"
+            || mock_lower == "1"
+        {
+            return AuthDecision::AllowAlways;
+        } else if mock_lower == "deny" || mock_lower == "0" {
+            return AuthDecision::Deny;
+        }
+    }
+
     // In headless / CI environments or when non-interactive, GUI prompt cannot be answered.
-    // Immediately return false to prevent CI runner hanging.
+    // Immediately return Deny to prevent CI runner hanging.
     if std::env::var("CI").is_ok()
         || std::env::var("GITHUB_ACTIONS").is_ok()
         || std::env::var("MCP_SENTINEL_NON_INTERACTIVE").is_ok()
@@ -41,7 +68,7 @@ pub fn ask_user_permission(command_name: &str, secrets: &[String]) -> bool {
         eprintln!(
             "[mcp-sentinel] Non-interactive / CI environment detected. Cannot display interactive consent dialog. Denying access."
         );
-        return false;
+        return AuthDecision::Deny;
     }
 
     let safe_command = sanitize_dialog_text(command_name, 120);
@@ -52,38 +79,61 @@ pub fn ask_user_permission(command_name: &str, secrets: &[String]) -> bool {
         "MCP Server is requesting access to environment secrets:\n\n\
         Command: {}\n\
         Requested Secrets: [{}]\n\n\
-        Do you allow this MCP server to access these secrets?\n\
-        (This permission will be remembered for future runs)",
+        Do you authorize this MCP server to access these secrets?\n\
+        - [Allow Always]: Authorize and remember for future sessions\n\
+        - [Allow Once]: Authorize for this run only (do not remember)\n\
+        - [Deny]: Reject access and terminate",
         safe_command, safe_secrets
     );
 
     let (tx, rx) = mpsc::channel();
 
     let title = "MCP-Sentinel Security Authorization".to_string();
+    let btn_always = "Allow Always".to_string();
+    let btn_once = "Allow Once".to_string();
+    let btn_deny = "Deny".to_string();
+
     thread::spawn(move || {
         let result = MessageDialog::new()
             .set_title(&title)
             .set_description(&message)
             .set_level(MessageLevel::Warning)
-            .set_buttons(MessageButtons::OkCancel)
+            .set_buttons(MessageButtons::YesNoCancelCustom(
+                btn_always, btn_once, btn_deny,
+            ))
             .show();
 
-        let allowed = result == MessageDialogResult::Ok;
-        let _ = tx.send(allowed);
+        let decision = match result {
+            MessageDialogResult::Custom(ref text) if text == "Allow Always" => {
+                AuthDecision::AllowAlways
+            }
+            MessageDialogResult::Custom(ref text) if text == "Allow Once" => {
+                AuthDecision::AllowOnce
+            }
+            MessageDialogResult::Custom(ref text) if text == "Deny" => AuthDecision::Deny,
+            MessageDialogResult::Yes => AuthDecision::AllowAlways,
+            MessageDialogResult::No => AuthDecision::AllowOnce,
+            MessageDialogResult::Ok => AuthDecision::AllowAlways,
+            MessageDialogResult::Cancel => AuthDecision::Deny,
+            _ => AuthDecision::Deny,
+        };
+        let _ = tx.send(decision);
     });
 
     match rx.recv_timeout(Duration::from_secs(DIALOG_TIMEOUT_SECS)) {
-        Ok(allowed) => allowed,
+        Ok(decision) => decision,
         Err(mpsc::RecvTimeoutError::Timeout) => {
             eprintln!(
                 "[mcp-sentinel] Security Prompt timed out after {} seconds. Access denied.",
                 DIALOG_TIMEOUT_SECS
             );
-            false
+            AuthDecision::Deny
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
-            eprintln!("[mcp-sentinel] Security Prompt dialog was closed or failed to render. Access denied.");
-            false
+            eprintln!(
+                "[mcp-sentinel] Security Prompt dialog was closed or failed to render. Access denied."
+            );
+            AuthDecision::Deny
         }
     }
 }
@@ -105,5 +155,22 @@ mod tests {
         let output = sanitize_dialog_text(&long_input, 50);
         assert_eq!(output.len(), 50);
         assert!(output.ends_with("..."));
+    }
+
+    #[test]
+    fn test_mock_dialog_response() {
+        std::env::set_var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE", "allow_once");
+        let decision = ask_user_permission("dummy_cmd", &["KEY1".to_string()]);
+        assert_eq!(decision, AuthDecision::AllowOnce);
+
+        std::env::set_var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE", "allow_always");
+        let decision = ask_user_permission("dummy_cmd", &["KEY1".to_string()]);
+        assert_eq!(decision, AuthDecision::AllowAlways);
+
+        std::env::set_var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE", "deny");
+        let decision = ask_user_permission("dummy_cmd", &["KEY1".to_string()]);
+        assert_eq!(decision, AuthDecision::Deny);
+
+        std::env::remove_var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE");
     }
 }

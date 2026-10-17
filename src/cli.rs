@@ -29,6 +29,10 @@ pub enum Commands {
         #[arg(long)]
         no_redact: bool,
 
+        /// Authorize this execution once without persisting permission to permissions.json
+        #[arg(long, alias = "once")]
+        allow_once: bool,
+
         /// Command and arguments to execute (after --)
         #[arg(last = true, required = true)]
         cmd: Vec<String>,
@@ -132,11 +136,43 @@ mod tests {
                 name,
                 cmd,
                 no_redact,
+                allow_once,
             } => {
                 assert_eq!(secrets, vec!["KEY_A".to_string(), "KEY_B".to_string()]);
                 assert_eq!(name, Some("My Server".to_string()));
                 assert_eq!(cmd, vec!["node".to_string(), "server.js".to_string()]);
                 assert!(!no_redact);
+                assert!(!allow_once);
+            }
+            _ => panic!("Expected Commands::Run"),
+        }
+    }
+
+    #[test]
+    fn test_parse_run_command_allow_once() {
+        let args = vec![
+            "mcp-sentinel",
+            "run",
+            "--allow-once",
+            "--",
+            "node",
+            "server.js",
+        ];
+        let cli = Cli::try_parse_from(args).expect("CLI should parse run command successfully");
+        match cli.command {
+            Commands::Run { allow_once, .. } => {
+                assert!(allow_once);
+            }
+            _ => panic!("Expected Commands::Run"),
+        }
+
+        // Test alias --once
+        let args_alias = vec!["mcp-sentinel", "run", "--once", "--", "node", "server.js"];
+        let cli_alias =
+            Cli::try_parse_from(args_alias).expect("CLI should parse --once alias successfully");
+        match cli_alias.command {
+            Commands::Run { allow_once, .. } => {
+                assert!(allow_once);
             }
             _ => panic!("Expected Commands::Run"),
         }

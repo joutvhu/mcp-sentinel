@@ -1,7 +1,7 @@
 # 🛡️ MCP Sentinel
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-65%2F65%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-68%2F68%20passing-brightgreen.svg)](tests/)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 [![Security](https://img.shields.io/badge/security-Zero--Trust%20%7C%20HMAC--SHA256-orange.svg)](#security-guarantees)
 
@@ -230,13 +230,13 @@ Replace the direct execution command in your host config with `mcp-sentinel run`
 }
 ```
 
-### Step 3: Approve Consent Once (TOFU)
+### Step 3: Authorize via Trust-On-First-Use (TOFU)
 
-Upon first launch, `mcp-sentinel` detects a new command fingerprint and displays a native security prompt:
+Upon first launch, `mcp-sentinel` detects a new command fingerprint and displays a native security prompt offering granular consent:
 
 ```
 +--------------------------------------------------------------+
-| MCP Sentinel Security Consent                                |
+| MCP Sentinel Security Authorization                          |
 +--------------------------------------------------------------+
 | The following MCP Server is requesting access to secrets:    |
 |                                                              |
@@ -244,12 +244,18 @@ Upon first launch, `mcp-sentinel` detects a new command fingerprint and displays
 | Command: npx -y @modelcontextprotocol/server-github          |
 | Requested Secrets: [GITHUB_TOKEN]                            |
 |                                                              |
-| Do you want to authorize this MCP server?                    |
-| [Yes]                                                   [No] |
+| Do you authorize this MCP server to access these secrets?    |
+| - [Allow Always]: Authorize and remember for future sessions |
+| - [Allow Once]: Grant for this execution only (ephemeral)    |
+| - [Deny]: Reject access and terminate                        |
+|                                                              |
+| [Allow Always]           [Allow Once]                 [Deny] |
 +--------------------------------------------------------------+
 ```
 
-Once granted, your decision is remembered. Subsequent runs execute instantly with zero interruptions.
+- **Allow Always**: Saves the cryptographic grant to `permissions.json`. Subsequent runs execute instantly with zero interruptions.
+- **Allow Once**: Authorizes the server for the current run only, keeping the grant in-memory. The next launch will prompt again.
+- **Deny**: Immediately aborts execution and denies access to credentials.
 
 ---
 
@@ -267,6 +273,7 @@ mcp-sentinel run [OPTIONS] -- <COMMAND> [ARGS]...
   - **Plain secret**: `GITHUB_TOKEN` (retrieves `GITHUB_TOKEN` from vault and injects as `GITHUB_TOKEN`).
   - **Aliased secret**: `TARGET_ENV=VAULT_KEY` (e.g., `API_KEY=OPENAI_PROD_KEY` retrieves `OPENAI_PROD_KEY` from vault and injects into child environment as `API_KEY`).
   - Allows multiple MCP servers using identical generic environment variable names (such as `API_KEY` or `DATABASE_URL`) to map cleanly to distinct secrets stored in your vault.
+- `--allow-once` (alias `--once`): Authorize this execution once without persisting permission to `permissions.json`.
 - `--no-redact`: Disable automatic Data Loss Prevention (DLP) secret masking on stdout. By default, Sentinel transparently redacts any authorized secrets echoed by the child process into `[REDACTED_BY_SENTINEL]`.
 - `--name <NAME>`: Friendly display name shown in authorization prompts.
 - `-- <COMMAND>`: Command and arguments of the target MCP server.
@@ -369,10 +376,10 @@ mcp-sentinel ui
 5. **Real-Time Data Loss Prevention (DLP)**: Stream redactor powered by `aho-corasick` scans the child's `stdout` pipeline on the fly. Any injected secret value (≥ 5 characters) echoed back by rogue tools, error logs, or LLM output is masked with `[REDACTED_BY_SENTINEL]` before reaching the host IDE, cleanly handling split secrets across 8KB streaming chunk boundaries.
 6. **UI Spoofing Defense**: The native authorization dialog collapses newlines and limits text lengths to prevent line-breaking and visual truncation attacks.
 7. **Hardware-Backed CSPRNG**: The master signing key is generated via native OS entropy (`rand::rngs::OsRng`), ensuring cryptographic unpredictability.
-8. **Verified by 65 Automated Tests across 5 Suites**:
-   - **Unit Tests (34 tests)**: Vault operations, alias mapping & validation, fingerprint collision resistance, HMAC signing & tamper rejection, environment sanitizer whitelist, dialog text sanitization, interactive TUI input field navigation, and stream-boundary DLP redaction.
+8. **Verified by 68 Automated Tests across 5 Suites**:
+   - **Unit Tests (36 tests)**: Vault operations, alias mapping & validation, fingerprint collision resistance, HMAC signing & tamper rejection, environment sanitizer whitelist, dialog text sanitization, interactive TUI input field navigation, stream-boundary DLP redaction, and Allow Once mock decisions.
    - **Integration Tests (8 tests)**: Subprocess execution, CLI parsing, exit code propagation, secret list, permissions list, TUI launch commands, and full migration workflow.
-   - **Security Penetration Tests (13 tests)**: Host environment variable exfiltration blocked, command injection (`;&|`) neutralized, forged permission injection rejected, argument smuggling intercepted, child process sandbox recursion blocked, reserved key name rejection, alias tamper resistance, and stdout DLP secret masking.
+   - **Security Penetration Tests (14 tests)**: Host environment variable exfiltration blocked, command injection (`;&|`) neutralized, forged permission injection rejected, argument smuggling intercepted, child process sandbox recursion blocked, reserved key name rejection, alias tamper resistance, stdout DLP secret masking, and Allow Once non-persistence.
    - **Stress Tests (6 tests)**: 100-secret bulk injection, corrupted policy resilience, Unicode & Vietnamese character preservation, stdio separation.
    - **Performance Benchmarks (4 tests)**: High-load async stdio streaming (~26,000 JSON-RPC msgs/sec), multithreaded SHA-256 hashing (~320,000 ops/sec).
 

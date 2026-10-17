@@ -527,3 +527,77 @@ fn hack_test_dlp_secret_masking_on_stdout() {
 
     let _ = mcp_sentinel::vault::delete_secret(vault_key);
 }
+
+/// HACK ATTACK 14: Ephemeral "Allow Once" Permission Granting
+/// Tests that choosing "Allow Once" (or supplying --allow-once / --once) allows the MCP server
+/// to run with authorized secrets during the current execution, but NEVER persists the grant
+/// to permissions.json, forcing the user to be re-prompted on the subsequent execution.
+#[test]
+fn hack_test_allow_once_does_not_persist_grant() {
+    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let vault_key = "TEST_VAULT_ALLOW_ONCE_KEY";
+    let raw_secret = "sk_ephemeral_token_once_789";
+
+    let _ = mcp_sentinel::vault::set_secret(vault_key, raw_secret);
+
+    let script = "console.log('EPHEMERAL_RUN_OK');";
+    let cmd = vec!["node".to_string(), "-e".to_string(), script.to_string()];
+    let fp = compute_fingerprint(&cmd);
+    let spec = format!("MY_KEY={}", vault_key);
+
+    // Ensure it is NOT already authorized
+    assert!(!mcp_sentinel::policy::is_authorized(&fp, &[spec.clone()]));
+
+    // 1. Run with Mock Dialog answering "Allow Once"
+    let output1 = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_MOCK_DIALOG_RESPONSE", "allow_once")
+        .args(["run", "--secrets", &spec, "--", "node", "-e", script])
+        .output()
+        .expect("Failed to execute mcp-sentinel with Allow Once");
+
+    assert!(output1.status.success());
+    let stdout1 = String::from_utf8_lossy(&output1.stdout);
+    assert!(stdout1.contains("EPHEMERAL_RUN_OK"));
+
+    // Verify: The permission must NOT have been saved to permissions.json!
+    assert!(
+        !mcp_sentinel::policy::is_authorized(&fp, &[spec.clone()]),
+        "Grant must NOT be persisted when 'Allow Once' is selected!"
+    );
+
+    // 2. Second execution without mock in non-interactive mode MUST fail
+    let output2 = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_NON_INTERACTIVE", "1")
+        .args(["run", "--secrets", &spec, "--", "node", "-e", script])
+        .output()
+        .expect("Failed to execute mcp-sentinel");
+
+    assert!(
+        !output2.status.success(),
+        "Subsequent run without authorization must fail because Allow Once did not persist!"
+    );
+
+    // 3. Test CLI flag --allow-once overrides AllowAlways to prevent persistence
+    let output3 = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_MOCK_DIALOG_RESPONSE", "allow_always")
+        .args([
+            "run",
+            "--allow-once",
+            "--secrets",
+            &spec,
+            "--",
+            "node",
+            "-e",
+            script,
+        ])
+        .output()
+        .expect("Failed to execute mcp-sentinel with --allow-once");
+
+    assert!(output3.status.success());
+    assert!(
+        !mcp_sentinel::policy::is_authorized(&fp, &[spec.clone()]),
+        "--allow-once flag must prevent persisting grant even if dialog returned AllowAlways!"
+    );
+
+    let _ = mcp_sentinel::vault::delete_secret(vault_key);
+}

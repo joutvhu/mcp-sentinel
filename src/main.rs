@@ -32,6 +32,7 @@ async fn main() {
             secrets,
             name,
             no_redact,
+            allow_once,
             cmd,
         } => {
             if cmd.is_empty() {
@@ -55,28 +56,45 @@ async fn main() {
             let fingerprint = policy::compute_fingerprint(&cmd);
 
             // 1. TOFU Authorization check
-            if !mappings.is_empty() && !policy::is_authorized(&fingerprint, &canonical_specs) {
+            let is_pre_authorized = policy::is_authorized(&fingerprint, &canonical_specs);
+            if !mappings.is_empty() && !is_pre_authorized {
                 eprintln!(
                     "[mcp-sentinel] Requesting user permission for '{}' (Fingerprint: {})...",
                     display_name,
                     &fingerprint[..12]
                 );
 
-                let allowed = dialog::ask_user_permission(&display_name, &display_labels);
-                if !allowed {
-                    eprintln!(
-                        "[mcp-sentinel] Security Error: Access to secrets denied by user or timed out."
-                    );
-                    exit(1);
-                }
-
-                if let Err(e) = policy::record_grant(&fingerprint, name, &cmd, &canonical_specs) {
-                    eprintln!(
-                        "[mcp-sentinel] Warning: Failed to persist permission grant: {}",
-                        e
-                    );
-                } else {
-                    eprintln!("[mcp-sentinel] Permission granted and saved for future sessions.");
+                let decision = dialog::ask_user_permission(&display_name, &display_labels);
+                match decision {
+                    dialog::AuthDecision::Deny => {
+                        eprintln!(
+                            "[mcp-sentinel] Security Error: Access to secrets denied by user or timed out."
+                        );
+                        exit(1);
+                    }
+                    dialog::AuthDecision::AllowOnce => {
+                        eprintln!(
+                            "[mcp-sentinel] Permission granted for this session only (Allow Once). Will prompt again on next launch."
+                        );
+                    }
+                    dialog::AuthDecision::AllowAlways => {
+                        if allow_once {
+                            eprintln!(
+                                "[mcp-sentinel] Permission granted for this session only (--allow-once flag specified)."
+                            );
+                        } else if let Err(e) =
+                            policy::record_grant(&fingerprint, name, &cmd, &canonical_specs)
+                        {
+                            eprintln!(
+                                "[mcp-sentinel] Warning: Failed to persist permission grant: {}",
+                                e
+                            );
+                        } else {
+                            eprintln!(
+                                "[mcp-sentinel] Permission granted and saved for future sessions."
+                            );
+                        }
+                    }
                 }
             }
 
