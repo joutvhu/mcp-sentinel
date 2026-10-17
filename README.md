@@ -1,7 +1,7 @@
 # 🛡️ MCP Sentinel
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-81%2F81%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-82%2F82%20passing-brightgreen.svg)](tests/)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 [![Security](https://img.shields.io/badge/security-Zero--Trust%20%7C%20HMAC--SHA256-orange.svg)](#security-guarantees)
 
@@ -180,9 +180,20 @@ mcp-sentinel secrets set POSTGRES_PASSWORD mySuperSecretPassword123
 
 ### Step 2: Configure your AI Application
 
-Replace the direct execution command in your host config with `mcp-sentinel run`.
+#### Option A: Automatic Migration (Recommended)
 
-#### Claude Desktop (`claude_desktop_config.json`)
+If you already have existing MCP servers configured in any AI agent (Claude, Cursor, Antigravity, Kiro, Codex, Windsurf, Cline, Roo Code, etc.), Sentinel can automatically extract secrets into your OS vault, strip plaintext credentials from disk, and wrap server commands with a single command:
+
+```bash
+# Auto-detects and migrates ALL installed AI agents on your system
+mcp-sentinel migrate
+```
+
+#### Option B: Manual Configuration
+
+Alternatively, wrap your server commands directly in your agent's MCP configuration file using `mcp-sentinel run`:
+
+##### Claude Desktop (`claude_desktop_config.json`)
 
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
@@ -212,6 +223,8 @@ Replace the direct execution command in your host config with `mcp-sentinel run`
         "Database MCP",
         "--secrets",
         "POSTGRES_PASSWORD",
+        "--profile",
+        "read-only",
         "--",
         "npx",
         "-y",
@@ -223,9 +236,12 @@ Replace the direct execution command in your host config with `mcp-sentinel run`
 }
 ```
 
-#### Cursor (`mcp.json`)
+##### Cursor (`mcp.json`), Antigravity, Kiro, or Codex
 
-- **Project Root**: `.cursor/mcp.json` or Global Cursor Settings
+- **Cursor**: `.cursor/mcp.json` or `~/.cursor/mcp.json`
+- **Antigravity**: `~/.gemini/config/mcp_config.json` or `.agents/mcp_config.json`
+- **Kiro**: `~/.kiro/settings/mcp.json` or `.kiro/mcp.json`
+- **Codex**: `~/.codex/mcp.json` or `.codex/mcp.json`
 
 ```json
 {
@@ -383,18 +399,38 @@ mcp-sentinel audit clear
 
 ### `mcp-sentinel migrate`
 
-Automatically scan and migrate existing plaintext MCP configuration files (`claude_desktop_config.json`, `mcp.json`) to Zero-Trust architecture. Extracts secrets into the OS Keyring, removes plaintext credentials from disk, and wraps commands with `mcp-sentinel`.
+Automatically scan and migrate existing plaintext MCP configuration files across all major AI agents and IDEs to Zero-Trust architecture. Extracts secrets into the native OS Keyring, eliminates plaintext credentials from disk, and wraps server commands with `mcp-sentinel`.
+
+**Supported AI Agents & Clients**:
+- **Claude**: Claude Desktop (`claude_desktop_config.json`) & Claude Code (`~/.claude.json`)
+- **Cursor**: Global (`~/.cursor/mcp.json`) & Workspace (`.cursor/mcp.json`, `mcp.json`)
+- **Antigravity**: Global (`~/.gemini/config/mcp_config.json`, `~/.gemini/antigravity-ide/mcp_config.json`) & Workspace (`.agents/mcp_config.json`, `.gemini/mcp_config.json`)
+- **Kiro**: Global (`~/.kiro/settings/mcp.json`, `~/.kiro/crew/mcp.json`) & Workspace (`.kiro/mcp.json`)
+- **Codex**: Global (`~/.codex/mcp.json`, `%APPDATA%\OpenAI\mcp.json`) & Workspace (`.codex/mcp.json`)
+- **Windsurf**: Global (`~/.codeium/windsurf/mcp_config.json`)
+- **Cline**: VS Code extension settings (`cline_mcp_settings.json`)
+- **Roo Code**: VS Code extension settings (`cline_mcp_settings.json`)
+- **VS Code**: Workspace MCP configs (`.vscode/mcp.json`)
+- **Continue**: Global configuration (`~/.continue/config.json`)
 
 ```bash
-# Auto-detect and migrate all Claude and Cursor MCP configurations
+# Auto-detect and migrate ALL supported AI agents installed on your machine
 mcp-sentinel migrate
 
-# Target a specific application
-mcp-sentinel migrate claude
+# Target a specific AI Agent or IDE
+mcp-sentinel migrate antigravity
+mcp-sentinel migrate kiro
+mcp-sentinel migrate codex
 mcp-sentinel migrate cursor
+mcp-sentinel migrate claude
+mcp-sentinel migrate windsurf
+mcp-sentinel migrate cline
+mcp-sentinel migrate roo
+mcp-sentinel migrate vscode
+mcp-sentinel migrate continue
 
-# Migrate a custom configuration file
-mcp-sentinel migrate --file /path/to/claude_desktop_config.json
+# Migrate any custom configuration file directly
+mcp-sentinel migrate --file /path/to/custom_mcp_config.json
 
 # Preview migration without modifying files or OS vault
 mcp-sentinel migrate --dry-run
@@ -413,7 +449,7 @@ mcp-sentinel ui
 ```
 
 * **Keyboard Navigation & Shortcuts:**
-  * `[↑]` / `[↓]`: Navigate menu items in the Sidebar, or items in the Content view
+  * `[↑]` / `[↓]`: Navigate menu items in Sidebar or scroll view items in Content view (supports mouse wheel and smooth vertical scrolling for smaller screens and laptop displays)
   * `[Enter]`: Select menu item, reveal secret, or trigger action
   * `[→]` / `[Tab]`: Enter content view from sidebar
   * `[←]` / `[Esc]`: Return focus to sidebar menu
@@ -448,8 +484,8 @@ mcp-sentinel ui
 7. **Hardware-Backed CSPRNG**: The master signing key is generated via native OS entropy (`rand::rngs::OsRng`), ensuring cryptographic unpredictability.
 8. **Layer 7 JSON-RPC Tool Firewall**: Intercepts `tools/call` requests on child process `stdin`. If an LLM or user attempts to call a tool blocked by the active profile or `--deny-tools` pattern, `mcp-sentinel` synthesizes a JSON-RPC `-32001` error response back to the host IDE, alerts `stderr`, and completely drops the request from reaching the child process.
 9. **Opt-in Structured Audit Trail**: When enabled via `--audit` or `MCP_SENTINEL_AUDIT=1`, captures structured security events (`SERVER_START`, `TOOL_CALL_ALLOWED`, `TOOL_CALL_BLOCKED`, `TOFU_DECISION`, `SERVER_EXIT`) in JSON-Lines format. Default is OFF (zero disk footprint). Plaintext secret values are strictly stripped and never logged, and logs rotate automatically at 5MB.
-10. **Verified by 81 Automated Tests across 5 Suites**:
-   - **Unit Tests (47 tests)**: Vault operations, alias mapping & validation, fingerprint collision resistance, HMAC signing & tamper rejection for policies and tool profiles, wildcard pattern evaluation, environment sanitizer whitelist, dialog text sanitization, interactive TUI navigation and state management, stream-boundary DLP redaction, Allow Once ephemeral grants, and structured audit entry serialization.
+10. **Verified by 82 Automated Tests across 5 Suites**:
+   - **Unit Tests (48 tests)**: Vault operations, alias mapping & validation, fingerprint collision resistance, HMAC signing & tamper rejection for policies and tool profiles, wildcard pattern evaluation, multi-agent auto-migration path discovery, environment sanitizer whitelist, dialog text sanitization, interactive TUI navigation and state management, stream-boundary DLP redaction, Allow Once ephemeral grants, and structured audit entry serialization.
    - **Integration Tests (8 tests)**: Subprocess execution, CLI parsing, exit code propagation, secret list, permissions list, TUI launch commands, and full migration workflow.
    - **Security Penetration Tests (16 tests)**: Host environment variable exfiltration blocked, command injection (`;&|`) neutralized, forged permission injection rejected, argument smuggling intercepted, child process sandbox recursion blocked, reserved key name rejection, alias tamper resistance, stdout DLP secret masking, Allow Once non-persistence, Layer 7 tool call firewall drop & error synthesis, and audit log default-off & secret leak immunity.
    - **Stress Tests (6 tests)**: 100-secret bulk injection, corrupted policy resilience, Unicode & Vietnamese character preservation, stdio separation.

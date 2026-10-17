@@ -7,6 +7,16 @@ use std::path::{Path, PathBuf};
 pub enum MigrateTarget {
     Claude,
     Cursor,
+    Antigravity,
+    Kiro,
+    Codex,
+    Windsurf,
+    Cline,
+    #[value(alias = "roo")]
+    RooCode,
+    #[value(alias = "vscode")]
+    VsCode,
+    Continue,
     All,
 }
 
@@ -30,44 +40,132 @@ pub struct FileMigrationReport {
 pub fn find_config_paths(target: MigrateTarget) -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
+    let mut add_if_exists = |path: PathBuf| {
+        if path.exists() && !paths.contains(&path) {
+            paths.push(path);
+        }
+    };
+
     let check_claude = matches!(target, MigrateTarget::Claude | MigrateTarget::All);
     let check_cursor = matches!(target, MigrateTarget::Cursor | MigrateTarget::All);
+    let check_antigravity = matches!(target, MigrateTarget::Antigravity | MigrateTarget::All);
+    let check_kiro = matches!(target, MigrateTarget::Kiro | MigrateTarget::All);
+    let check_codex = matches!(target, MigrateTarget::Codex | MigrateTarget::All);
+    let check_windsurf = matches!(target, MigrateTarget::Windsurf | MigrateTarget::All);
+    let check_cline = matches!(target, MigrateTarget::Cline | MigrateTarget::All);
+    let check_roo = matches!(target, MigrateTarget::RooCode | MigrateTarget::All);
+    let check_vscode = matches!(target, MigrateTarget::VsCode | MigrateTarget::All);
+    let check_continue = matches!(target, MigrateTarget::Continue | MigrateTarget::All);
 
     if let Some(base_dirs) = directories::BaseDirs::new() {
+        let home = base_dirs.home_dir();
+        let config_dir = base_dirs.config_dir();
+
         if check_claude {
             // Windows: %APPDATA%\Claude\claude_desktop_config.json
             // macOS: ~/Library/Application Support/Claude/claude_desktop_config.json
             // Linux: ~/.config/Claude/claude_desktop_config.json
-            let claude_path = base_dirs
-                .config_dir()
-                .join("Claude")
-                .join("claude_desktop_config.json");
-            if claude_path.exists() {
-                paths.push(claude_path);
-            }
+            add_if_exists(config_dir.join("Claude").join("claude_desktop_config.json"));
+            // Claude Code CLI
+            add_if_exists(home.join(".claude.json"));
+            add_if_exists(home.join(".claude").join("mcp.json"));
         }
 
         if check_cursor {
             // Global Cursor MCP config: ~/.cursor/mcp.json
-            let cursor_home = base_dirs.home_dir().join(".cursor").join("mcp.json");
-            if cursor_home.exists() {
-                paths.push(cursor_home);
-            }
+            add_if_exists(home.join(".cursor").join("mcp.json"));
+        }
+
+        if check_antigravity {
+            // Antigravity global configurations
+            add_if_exists(home.join(".gemini").join("config").join("mcp_config.json"));
+            add_if_exists(
+                home.join(".gemini")
+                    .join("antigravity-ide")
+                    .join("mcp_config.json"),
+            );
+            add_if_exists(
+                home.join(".gemini")
+                    .join("antigravity")
+                    .join("mcp_config.json"),
+            );
+        }
+
+        if check_kiro {
+            // Kiro global settings and crew configs
+            add_if_exists(home.join(".kiro").join("settings").join("mcp.json"));
+            add_if_exists(home.join(".kiro").join("crew").join("mcp.json"));
+        }
+
+        if check_codex {
+            // OpenAI Codex CLI & Desktop configurations
+            add_if_exists(home.join(".codex").join("mcp.json"));
+            add_if_exists(config_dir.join("OpenAI").join("mcp.json"));
+        }
+
+        if check_windsurf {
+            // Windsurf (Codeium) global config
+            add_if_exists(
+                home.join(".codeium")
+                    .join("windsurf")
+                    .join("mcp_config.json"),
+            );
+        }
+
+        if check_cline {
+            // Cline VS Code extension global settings
+            add_if_exists(
+                config_dir
+                    .join("Code")
+                    .join("User")
+                    .join("globalStorage")
+                    .join("saoudrizwan.claude-dev")
+                    .join("settings")
+                    .join("cline_mcp_settings.json"),
+            );
+        }
+
+        if check_roo {
+            // Roo Code extension global settings
+            add_if_exists(
+                config_dir
+                    .join("Code")
+                    .join("User")
+                    .join("globalStorage")
+                    .join("rooveterinaryinc.roo-cline")
+                    .join("settings")
+                    .join("cline_mcp_settings.json"),
+            );
+        }
+
+        if check_continue {
+            // Continue.dev global config
+            add_if_exists(home.join(".continue").join("config.json"));
         }
     }
 
+    // Workspace / Project-level configurations
     if check_cursor {
-        // Project-level .cursor/mcp.json
-        let local_cursor = PathBuf::from(".cursor").join("mcp.json");
-        if local_cursor.exists() && !paths.contains(&local_cursor) {
-            paths.push(local_cursor);
-        }
+        add_if_exists(PathBuf::from(".cursor").join("mcp.json"));
+        add_if_exists(PathBuf::from("mcp.json"));
+    }
 
-        // Local mcp.json in current directory
-        let local_mcp = PathBuf::from("mcp.json");
-        if local_mcp.exists() && !paths.contains(&local_mcp) {
-            paths.push(local_mcp);
-        }
+    if check_antigravity {
+        add_if_exists(PathBuf::from(".agents").join("mcp_config.json"));
+        add_if_exists(PathBuf::from(".gemini").join("mcp_config.json"));
+    }
+
+    if check_kiro {
+        add_if_exists(PathBuf::from(".kiro").join("mcp.json"));
+        add_if_exists(PathBuf::from(".kiro").join("settings").join("mcp.json"));
+    }
+
+    if check_codex {
+        add_if_exists(PathBuf::from(".codex").join("mcp.json"));
+    }
+
+    if check_vscode {
+        add_if_exists(PathBuf::from(".vscode").join("mcp.json"));
     }
 
     paths
@@ -346,5 +444,30 @@ mod tests {
         assert_eq!(sanitize_for_env_key("my-api-key"), "MY_API_KEY");
         assert_eq!(sanitize_for_env_key("token@service"), "TOKEN_SERVICE");
         assert_eq!(sanitize_for_env_key("___"), "SECRET");
+    }
+
+    #[test]
+    fn test_find_config_paths_all_targets() {
+        let targets = [
+            MigrateTarget::Claude,
+            MigrateTarget::Cursor,
+            MigrateTarget::Antigravity,
+            MigrateTarget::Kiro,
+            MigrateTarget::Codex,
+            MigrateTarget::Windsurf,
+            MigrateTarget::Cline,
+            MigrateTarget::RooCode,
+            MigrateTarget::VsCode,
+            MigrateTarget::Continue,
+            MigrateTarget::All,
+        ];
+        for t in targets {
+            let paths = find_config_paths(t);
+            // Verify no duplicate paths returned
+            let mut unique = std::collections::HashSet::new();
+            for p in paths {
+                assert!(unique.insert(p), "Found duplicate path in search results");
+            }
+        }
     }
 }

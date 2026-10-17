@@ -15,8 +15,9 @@ This release introduces comprehensive Layer 7 tool call interception, automated 
 
 ### ✨ New Features & Capabilities
 
-- **Automated Configuration Migration (`mcp-sentinel migrate`):**
-  - One-click discovery and migration of raw plaintext secrets in Claude Desktop (`claude_desktop_config.json`) and Cursor (`mcp.json`).
+- **Automated Multi-Agent Configuration Migration (`mcp-sentinel migrate`):**
+  - One-click discovery and migration across all major AI Agents and IDEs: **Claude Desktop**, **Claude Code**, **Cursor**, **Antigravity**, **Kiro**, **Codex**, **Windsurf**, **Cline**, **Roo Code**, **VS Code**, and **Continue**.
+  - Dedicated CLI sub-targets (e.g., `mcp-sentinel migrate antigravity`, `mcp-sentinel migrate kiro`, `mcp-sentinel migrate codex`) or universal scan (`mcp-sentinel migrate`).
   - Safely extracts credentials directly into the OS-backed hardware keyring and rewrites server configs to invoke `mcp-sentinel run`.
   - Supports `--dry-run` inspection and automatic `.bak` backup creation.
 
@@ -60,7 +61,7 @@ This release introduces comprehensive Layer 7 tool call interception, automated 
   - One-line install scripts (`install.ps1`, `install.sh`) now support `-Headless` / `--headless`.
 
 ### 🛡️ Test Coverage & Quality
-- **81/81 automated tests passing** across Unit, Integration, Performance, Security Hacking, and Stress test suites.
+- **82/82 automated tests passing** across Unit, Integration, Performance, Security Hacking, and Stress test suites.
 - 0 compiler warnings, 0 clippy warnings, 100% rustfmt compliant.
 
 ---

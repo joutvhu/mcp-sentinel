@@ -88,7 +88,7 @@ pub enum Commands {
 
     /// Migrate existing plaintext MCP configurations to Zero-Trust vault
     Migrate {
-        /// Target application to migrate (claude, cursor, all)
+        /// Target application to migrate (claude, cursor, antigravity, kiro, codex, windsurf, cline, roo, vscode, continue, or all)
         #[arg(value_enum)]
         target: Option<crate::migrate::MigrateTarget>,
 
@@ -528,6 +528,42 @@ mod tests {
                 assert_eq!(target, Some(crate::migrate::MigrateTarget::Claude));
                 assert!(dry_run);
                 assert!(no_backup);
+            }
+            _ => panic!("Expected Commands::Migrate"),
+        }
+
+        // Test Antigravity target
+        let cli_ag = Cli::try_parse_from(["mcp-sentinel", "migrate", "antigravity"]).unwrap();
+        match cli_ag.command {
+            Commands::Migrate { target, .. } => {
+                assert_eq!(target, Some(crate::migrate::MigrateTarget::Antigravity));
+            }
+            _ => panic!("Expected Commands::Migrate"),
+        }
+
+        // Test Kiro target
+        let cli_kiro = Cli::try_parse_from(["mcp-sentinel", "migrate", "kiro"]).unwrap();
+        match cli_kiro.command {
+            Commands::Migrate { target, .. } => {
+                assert_eq!(target, Some(crate::migrate::MigrateTarget::Kiro));
+            }
+            _ => panic!("Expected Commands::Migrate"),
+        }
+
+        // Test Codex target
+        let cli_codex = Cli::try_parse_from(["mcp-sentinel", "migrate", "codex"]).unwrap();
+        match cli_codex.command {
+            Commands::Migrate { target, .. } => {
+                assert_eq!(target, Some(crate::migrate::MigrateTarget::Codex));
+            }
+            _ => panic!("Expected Commands::Migrate"),
+        }
+
+        // Test Roo alias
+        let cli_roo = Cli::try_parse_from(["mcp-sentinel", "migrate", "roo"]).unwrap();
+        match cli_roo.command {
+            Commands::Migrate { target, .. } => {
+                assert_eq!(target, Some(crate::migrate::MigrateTarget::RooCode));
             }
             _ => panic!("Expected Commands::Migrate"),
         }
