@@ -45,7 +45,13 @@ jobs:
         run: cargo build --verbose
 
       - name: Run unit & integration tests
-        run: cargo test --verbose
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run --auto-servernum dbus-run-session cargo test --verbose
+          else
+            cargo test --verbose
+          fi
+        shell: bash
 
       - name: Build release binary
         run: cargo build --release --verbose

@@ -147,8 +147,8 @@ fn hack_test_requesting_missing_secret_fails_safely() {
     let missing_secret = "NON_EXISTENT_UNKNOWN_KEY_9999".to_string();
 
     // Pre-authorize this test command so it skips the interactive GUI prompt
-    let _ =
-        mcp_sentinel::policy::record_grant(&fp, None, &cmd, std::slice::from_ref(&missing_secret));
+    mcp_sentinel::policy::record_grant(&fp, None, &cmd, std::slice::from_ref(&missing_secret))
+        .expect("Pre-authorizing grant for test must succeed");
 
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
         .args([

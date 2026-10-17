@@ -30,27 +30,63 @@ pub struct PolicyFile {
 
 static MASTER_KEY_CACHE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
 
-/// Retrieves or securely generates a 256-bit signing key inside the OS Keyring.
+fn get_master_key_file_path() -> Option<PathBuf> {
+    let base_dirs = BaseDirs::new()?;
+    let config_dir = base_dirs.config_dir().join("mcp-sentinel");
+    let _ = fs::create_dir_all(&config_dir);
+    Some(config_dir.join(".master_key"))
+}
+
+/// Retrieves or securely generates a 256-bit signing key inside the OS Keyring,
+/// with a protected filesystem fallback for headless / CI environments.
 pub fn get_or_create_master_key() -> Result<Vec<u8>, String> {
     if let Some(key) = MASTER_KEY_CACHE.get() {
         return Ok(key.clone());
     }
 
-    let key = match crate::vault::get_secret(MASTER_SIGNING_KEY_NAME) {
-        Ok(hex_str) => hex::decode(&hex_str).map_err(|e| e.to_string())?,
-        Err(_) => {
-            use rand::rngs::OsRng;
-            use rand::RngCore;
-
-            let mut key_bytes = [0u8; 32];
-            OsRng.fill_bytes(&mut key_bytes);
-
-            let hex_key = hex::encode(key_bytes);
-            let _ = crate::vault::set_secret(MASTER_SIGNING_KEY_NAME, &hex_key);
-            key_bytes.to_vec()
+    // 1. Try retrieving from OS Keyring first
+    if let Ok(hex_str) = crate::vault::get_secret(MASTER_SIGNING_KEY_NAME) {
+        if let Ok(bytes) = hex::decode(&hex_str) {
+            let _ = MASTER_KEY_CACHE.set(bytes.clone());
+            return Ok(bytes);
         }
-    };
+    }
 
+    // 2. Fallback to protected local key file (for headless/CI where Keyring daemon is absent)
+    if let Some(key_path) = get_master_key_file_path() {
+        if key_path.exists() {
+            if let Ok(hex_str) = fs::read_to_string(&key_path) {
+                if let Ok(bytes) = hex::decode(hex_str.trim()) {
+                    let _ = MASTER_KEY_CACHE.set(bytes.clone());
+                    return Ok(bytes);
+                }
+            }
+        }
+    }
+
+    // 3. Generate a new cryptographically secure 256-bit key
+    use rand::rngs::OsRng;
+    use rand::RngCore;
+
+    let mut key_bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut key_bytes);
+
+    let hex_key = hex::encode(key_bytes);
+
+    // Save to OS Keyring if available
+    let _ = crate::vault::set_secret(MASTER_SIGNING_KEY_NAME, &hex_key);
+
+    // Also persist to local protected fallback file with 0600 mode
+    if let Some(key_path) = get_master_key_file_path() {
+        let _ = fs::write(&key_path, &hex_key);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600));
+        }
+    }
+
+    let key = key_bytes.to_vec();
     let _ = MASTER_KEY_CACHE.set(key.clone());
     Ok(key)
 }
