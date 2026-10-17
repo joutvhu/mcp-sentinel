@@ -998,3 +998,146 @@ fn hack_test_permissions_grant_headless_preauth() {
     let _ = mcp_sentinel::policy::revoke_grant(&fp);
     let _ = mcp_sentinel::vault::delete_secret(vault_key);
 }
+
+/// HACK ATTACK 19: Multi-line / Formatted JSON-RPC Firewall Inspection (SEC-01)
+/// Attackers format JSON-RPC payloads with whitespace and newlines to bypass line-oriented readers.
+/// The streaming parser in Sentinel must correctly assemble multi-line objects,
+/// block destructive tool calls, return code -32001, and never send them to the child.
+#[test]
+fn hack_test_multiline_formatted_jsonrpc_firewall_blocks_destructive_call() {
+    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+
+    let server_script = r#"
+        const readline = require('readline');
+        const rl = readline.createInterface({ input: process.stdin });
+        let buf = '';
+        process.stdin.on('data', (chunk) => {
+            buf += chunk.toString();
+            try {
+                const parsed = JSON.parse(buf);
+                console.log(JSON.stringify({ jsonrpc: '2.0', id: parsed.id, result: { executed: parsed.params.name } }));
+                buf = '';
+            } catch (e) {}
+        });
+    "#;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args([
+            "run",
+            "--profile",
+            "read-only",
+            "--",
+            "node",
+            "-e",
+            server_script,
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn mcp-sentinel");
+
+    {
+        use std::io::Write;
+        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+
+        // Send a multi-line formatted JSON-RPC tool call
+        let multiline_payload = "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 99,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"drop_database\"\n  }\n}\n";
+        stdin.write_all(multiline_payload.as_bytes()).unwrap();
+        stdin.flush().unwrap();
+    }
+
+    let output = child.wait_with_output().expect("Failed to read output");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // 1. Must intercept with code -32001 error response
+    assert!(
+        stdout.contains("\"code\":-32001") && stdout.contains("blocked by security policy"),
+        "Multi-line JSON-RPC tool call must be intercepted! Stdout: {}",
+        stdout
+    );
+
+    // 2. Child process must NEVER have executed drop_database
+    assert!(
+        !stdout.contains("\"executed\":\"drop_database\""),
+        "Destructive tool in multi-line JSON-RPC must NEVER reach child! Stdout: {}",
+        stdout
+    );
+}
+
+/// HACK ATTACK 20: Protecting Internal Master Key from secret get and secret delete (SEC-04)
+/// Attackers or malicious scripts attempting to query `secret get __master_key__` or delete it
+/// must be blocked by key name validation to prevent HMAC key exfiltration or sabotage.
+#[test]
+fn hack_test_secret_get_and_delete_blocks_internal_master_key() {
+    // 1. secret get __master_key__ must fail
+    let get_output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args(["secret", "get", "__master_key__"])
+        .output()
+        .expect("Failed to execute secret get");
+
+    assert!(
+        !get_output.status.success(),
+        "secret get __master_key__ must fail!"
+    );
+    let get_stderr = String::from_utf8_lossy(&get_output.stderr);
+    assert!(
+        get_stderr.contains("reserved prefix"),
+        "Must block access to reserved prefix! Stderr: {}",
+        get_stderr
+    );
+
+    // 2. secret delete __master_key__ must fail
+    let del_output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args(["secret", "delete", "__master_key__"])
+        .output()
+        .expect("Failed to execute secret delete");
+
+    assert!(
+        !del_output.status.success(),
+        "secret delete __master_key__ must fail!"
+    );
+    let del_stderr = String::from_utf8_lossy(&del_output.stderr);
+    assert!(
+        del_stderr.contains("reserved prefix"),
+        "Must block deletion of reserved prefix! Stderr: {}",
+        del_stderr
+    );
+}
+
+/// HACK ATTACK 21: Migrate server with reserved prefix in name does not crash (BUG-03)
+#[test]
+fn hack_test_migrate_server_name_with_mcp_sentinel_prefix() {
+    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+
+    let input_json = r#"{
+        "mcpServers": {
+            "mcp-sentinel-server": {
+                "command": "node",
+                "args": ["server.js"],
+                "env": {
+                    "API_KEY": "test_secret_value_123"
+                }
+            }
+        }
+    }"#;
+
+    // Dry-run migration should succeed without crashing on reserved prefix
+    let result = mcp_sentinel::migrate::transform_config_json(input_json, true);
+    assert!(
+        result.is_ok(),
+        "Migration with mcp-sentinel prefix in server name must succeed! Error: {:?}",
+        result.err()
+    );
+
+    let (output_json, results) = result.unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].extracted_secrets.len(), 1);
+
+    // The extracted key should have been safely prefixed with SRV_ to avoid MCP_SENTINEL_ reserved key
+    let parsed: serde_json::Value = serde_json::from_str(&output_json).unwrap();
+    assert_eq!(
+        parsed["mcpServers"]["mcp-sentinel-server"]["command"],
+        "mcp-sentinel"
+    );
+}

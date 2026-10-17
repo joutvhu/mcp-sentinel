@@ -77,19 +77,17 @@ pub fn get_or_create_master_key() -> Result<Vec<u8>, String> {
         }
     }
 
-    // 2. Check if local fallback file exists (for headless/testing environments without a keyring)
+    // 2. Check if local fallback file exists (for headless/container environments without an OS keyring)
     let allow_file = std::env::var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
-    if allow_file {
-        if let Some(key_path) = get_master_key_file_path() {
-            if key_path.exists() {
-                if let Ok(hex_str) = fs::read_to_string(&key_path) {
-                    if let Ok(bytes) = hex::decode(hex_str.trim()) {
-                        let _ = MASTER_KEY_CACHE.set(bytes.clone());
-                        return Ok(bytes);
-                    }
+    if let Some(key_path) = get_master_key_file_path() {
+        if key_path.exists() {
+            if let Ok(hex_str) = fs::read_to_string(&key_path) {
+                if let Ok(bytes) = hex::decode(hex_str.trim()) {
+                    let _ = MASTER_KEY_CACHE.set(bytes.clone());
+                    return Ok(bytes);
                 }
             }
         }

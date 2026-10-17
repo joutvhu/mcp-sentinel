@@ -70,8 +70,15 @@ This release introduces comprehensive Layer 7 tool call interception, automated 
 - **System Tool & Path Safety**: Eliminated recursive directory stripping from `PATH` and included standard Linux variables (`XDG_*`, `SSL_CERT_*`, `VIRTUAL_ENV`) in whitelist.
 - **Case-Preserving Config Migration**: Preserved camelCase env keys and added leading underscore sanitization for numeric names during `mcp-sentinel migrate`.
 
+- **Multi-Line & Pretty-Printed JSON-RPC Firewall**: Replaced line-by-line reading with streaming deserialization, preventing bypass of L7 firewall via multi-line JSON-RPC payloads (SEC-01).
+- **Strict HMAC Validation**: Denied untrusted/tampered tool policy profiles without fallback auto-signing when signatures are absent or invalid (SEC-02).
+- **Master Key Name Protection**: Blocked retrieval or deletion of internal `__master_key__` via CLI secret management commands (SEC-04).
+- **Atomic Line Interleaving**: Guarded child stdout chunk line-buffering to prevent synthetic error frames from corrupting child JSON-RPC responses (BUG-01).
+- **Headless Master Key Persistence**: Fixed master key reload from file in containerized/headless environments when OS keyring is unavailable (BUG-02).
+- **Migrate Prefix Collision Guard**: Automatically prefixed reserved server keys (`MCP_SENTINEL*`) with `SRV_` to avoid migration failures (BUG-03).
+
 ### 🛡️ Test Coverage & Quality
-- **86/86 automated tests passing** across Unit, Integration, Performance, Security Hacking, and Stress test suites.
+- **90/90 automated tests passing** across Unit, Integration, Performance, Security Hacking, and Stress test suites.
 - 0 compiler warnings, 0 clippy warnings, 100% rustfmt compliant.
 
 ---

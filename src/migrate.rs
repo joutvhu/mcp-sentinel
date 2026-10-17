@@ -277,6 +277,13 @@ pub fn transform_config_json(
                     }
                 }
 
+                // Avoid collision with reserved sentinel prefixes
+                if vault_key.to_uppercase().starts_with("MCP_SENTINEL")
+                    || vault_key.starts_with("__")
+                {
+                    vault_key = format!("SRV_{}", vault_key);
+                }
+
                 if !dry_run {
                     crate::vault::set_secret(&vault_key, &val_str).map_err(|e| {
                         format!("Failed to store secret '{}' in Keyring: {}", vault_key, e)

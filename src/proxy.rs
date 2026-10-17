@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 /// Evaluates a single JSON-RPC request object against the active tool policy.
@@ -166,28 +166,47 @@ pub async fn run_child_and_pipe(
     let (err_tx, mut err_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
 
     let stdout_writer_task = tokio::spawn(async move {
-        let mut buf = [0u8; 8192];
+        let mut child_buf = Vec::new();
+        let mut raw_buf = [0u8; 8192];
         loop {
             tokio::select! {
-                Some(err_bytes) = err_rx.recv() => {
+                // Synthetic errors are only written at clean message/newline boundaries
+                Some(err_bytes) = err_rx.recv(), if child_buf.is_empty() => {
                     if host_stdout.write_all(&err_bytes).await.is_err() {
                         break;
                     }
                     let _ = host_stdout.flush().await;
                 }
-                res = duplex_read.read(&mut buf) => {
+                res = duplex_read.read(&mut raw_buf) => {
                     match res {
-                        Ok(0) => break, // EOF from child_stdout pipeline
-                        Ok(n) => {
-                            if host_stdout.write_all(&buf[..n]).await.is_err() {
-                                break;
+                        Ok(0) => {
+                            if !child_buf.is_empty() {
+                                let _ = host_stdout.write_all(&child_buf).await;
+                                let _ = host_stdout.flush().await;
+                                child_buf.clear();
                             }
-                            let _ = host_stdout.flush().await;
+                            break;
+                        }
+                        Ok(n) => {
+                            child_buf.extend_from_slice(&raw_buf[..n]);
+                            // Only flush complete lines ending in \n to prevent corrupting concurrent writes
+                            if let Some(last_nl) = child_buf.iter().rposition(|&b| b == b'\n') {
+                                let to_write = &child_buf[..=last_nl];
+                                if host_stdout.write_all(to_write).await.is_err() {
+                                    break;
+                                }
+                                let _ = host_stdout.flush().await;
+                                child_buf.drain(..=last_nl);
+                            }
                         }
                         Err(_) => break,
                     }
                 }
             }
+        }
+        // Drain any remaining child_buf
+        if !child_buf.is_empty() {
+            let _ = host_stdout.write_all(&child_buf).await;
         }
         // Drain any remaining synthetic errors
         while let Ok(err_bytes) = err_rx.try_recv() {
@@ -199,80 +218,122 @@ pub async fn run_child_and_pipe(
     // Spawn async background tasks for stdin, stdout, stderr forwarding
     let in_task = tokio::spawn(async move {
         if tool_profile.is_some() || audit_enabled {
-            let mut reader = BufReader::new(host_stdin).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                let trimmed = line.trim();
+            let mut in_buf = Vec::new();
+            let mut read_buf = [0u8; 8192];
 
-                if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                    match val {
-                        serde_json::Value::Object(_) => {
-                            if let Some(err_resp) = check_single_tool_request(
-                                &val,
-                                &tool_profile,
-                                audit_enabled,
-                                &server_name_clone,
-                            ) {
-                                let mut err_bytes = err_resp.to_string();
-                                err_bytes.push('\n');
-                                let _ = err_tx.send(err_bytes.into_bytes()).await;
-                                continue; // Blocked: do not forward request to child
-                            }
-                        }
-                        serde_json::Value::Array(ref mut arr) => {
-                            let mut blocked_errors = Vec::new();
-                            let mut allowed_requests = Vec::new();
+            loop {
+                let n = match host_stdin.read(&mut read_buf).await {
+                    Ok(0) => break, // EOF
+                    Ok(n) => n,
+                    Err(_) => break,
+                };
+                in_buf.extend_from_slice(&read_buf[..n]);
 
-                            for item in arr.drain(..) {
-                                if let Some(err_resp) = check_single_tool_request(
-                                    &item,
-                                    &tool_profile,
-                                    audit_enabled,
-                                    &server_name_clone,
-                                ) {
-                                    blocked_errors.push(err_resp);
-                                } else {
-                                    allowed_requests.push(item);
+                loop {
+                    // Skip leading whitespace
+                    let start_idx = in_buf
+                        .iter()
+                        .position(|b| !b.is_ascii_whitespace())
+                        .unwrap_or(in_buf.len());
+                    if start_idx > 0 {
+                        in_buf.drain(..start_idx);
+                    }
+                    if in_buf.is_empty() {
+                        break;
+                    }
+
+                    // Attempt to parse a complete JSON value from the stream buffer
+                    let mut de = serde_json::Deserializer::from_slice(&in_buf)
+                        .into_iter::<serde_json::Value>();
+                    match de.next() {
+                        Some(Ok(mut val)) => {
+                            let consumed = de.byte_offset();
+                            in_buf.drain(..consumed);
+
+                            match val {
+                                serde_json::Value::Object(_) => {
+                                    if let Some(err_resp) = check_single_tool_request(
+                                        &val,
+                                        &tool_profile,
+                                        audit_enabled,
+                                        &server_name_clone,
+                                    ) {
+                                        let mut err_bytes = err_resp.to_string();
+                                        err_bytes.push('\n');
+                                        let _ = err_tx.send(err_bytes.into_bytes()).await;
+                                        continue; // Blocked: do not forward request to child
+                                    }
                                 }
+                                serde_json::Value::Array(ref mut arr) => {
+                                    let mut blocked_errors = Vec::new();
+                                    let mut allowed_requests = Vec::new();
+
+                                    for item in arr.drain(..) {
+                                        if let Some(err_resp) = check_single_tool_request(
+                                            &item,
+                                            &tool_profile,
+                                            audit_enabled,
+                                            &server_name_clone,
+                                        ) {
+                                            blocked_errors.push(err_resp);
+                                        } else {
+                                            allowed_requests.push(item);
+                                        }
+                                    }
+
+                                    if !blocked_errors.is_empty() {
+                                        let mut err_bytes = serde_json::to_string(
+                                            &serde_json::Value::Array(blocked_errors),
+                                        )
+                                        .unwrap_or_default();
+                                        err_bytes.push('\n');
+                                        let _ = err_tx.send(err_bytes.into_bytes()).await;
+                                    }
+
+                                    if allowed_requests.is_empty() {
+                                        continue; // Entire batch blocked
+                                    }
+
+                                    val = serde_json::Value::Array(allowed_requests);
+                                }
+                                _ => {}
                             }
 
-                            if !blocked_errors.is_empty() {
-                                let mut err_bytes = serde_json::to_string(
-                                    &serde_json::Value::Array(blocked_errors),
-                                )
-                                .unwrap_or_default();
-                                err_bytes.push('\n');
-                                let _ = err_tx.send(err_bytes.into_bytes()).await;
-                            }
-
-                            if allowed_requests.is_empty() {
-                                continue; // Entire batch blocked: nothing forwarded to child
-                            }
-
-                            // Forward allowed requests as a batch to child
-                            val = serde_json::Value::Array(allowed_requests);
+                            // Forward allowed JSON to child stdin
                             let mut payload = val.to_string();
                             payload.push('\n');
                             if child_stdin.write_all(payload.as_bytes()).await.is_err() {
-                                break;
+                                return;
                             }
                             if child_stdin.flush().await.is_err() {
+                                return;
+                            }
+                        }
+                        Some(Err(ref e)) if e.is_eof() => {
+                            // Incomplete JSON value: wait for more bytes from host_stdin
+                            break;
+                        }
+                        Some(Err(_)) => {
+                            // Non-JSON line or syntax error: forward up to next newline if present
+                            if let Some(pos) = in_buf.iter().position(|&b| b == b'\n') {
+                                let chunk: Vec<u8> = in_buf.drain(..=pos).collect();
+                                if child_stdin.write_all(&chunk).await.is_err() {
+                                    return;
+                                }
+                                let _ = child_stdin.flush().await;
+                            } else {
                                 break;
                             }
-                            continue;
                         }
-                        _ => {}
+                        None => break,
                     }
                 }
+            }
 
-                // Normal unblocked forwarding
-                let mut payload = line;
-                payload.push('\n');
-                if child_stdin.write_all(payload.as_bytes()).await.is_err() {
-                    break;
-                }
-                if child_stdin.flush().await.is_err() {
-                    break;
-                }
+            // Flush remaining buffer at EOF if non-empty
+            if !in_buf.is_empty() {
+                let _ = child_stdin.write_all(&in_buf).await;
+                let _ = child_stdin.flush().await;
             }
         } else {
             let _ = tokio::io::copy(&mut host_stdin, &mut child_stdin).await;

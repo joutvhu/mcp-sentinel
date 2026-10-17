@@ -238,9 +238,9 @@ pub fn load_profiles() -> Result<ToolPolicyFile, String> {
     let expected_sig = compute_file_signature(&file.profiles)?;
     match file.signature {
         Some(ref sig) if sig == &expected_sig => Ok(file),
-        Some(_) => {
+        _ => {
             eprintln!(
-                "[mcp-sentinel] Security Warning: Tampered tool_policies.json detected! HMAC signature mismatch. Discarding tampered file and restoring defaults."
+                "[mcp-sentinel] Security Warning: Tampered or unsigned tool_policies.json detected! Discarding tampered file and restoring defaults."
             );
             let backup_path = file_path.with_extension("json.tampered");
             let _ = fs::rename(&file_path, backup_path);
@@ -251,12 +251,6 @@ pub fn load_profiles() -> Result<ToolPolicyFile, String> {
             };
             let _ = save_profiles(&fallback);
             Ok(fallback)
-        }
-        None => {
-            // Migrate legacy/unsigned file by attaching fresh signature
-            let signed = file;
-            let _ = save_profiles(&signed);
-            Ok(signed)
         }
     }
 }
@@ -392,5 +386,25 @@ mod tests {
             evaluate_tool_call("drop_table", ro),
             ToolDecision::Blocked { .. }
         ));
+    }
+
+    #[test]
+    fn test_tampered_or_unsigned_tool_policies_file_rejected() {
+        let unsigned_json = r#"{
+            "profiles": {
+                "hacked": {
+                    "name": "hacked",
+                    "allow": ["*"],
+                    "deny": []
+                }
+            },
+            "signature": null
+        }"#;
+
+        let file: ToolPolicyFile = serde_json::from_str(unsigned_json).unwrap();
+        let expected_sig = compute_file_signature(&file.profiles).unwrap();
+
+        let is_valid = matches!(file.signature, Some(ref sig) if sig == &expected_sig);
+        assert!(!is_valid, "Unsigned policy file must be rejected!");
     }
 }

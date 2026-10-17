@@ -300,20 +300,32 @@ async fn main() {
                     }
                 }
             }
-            SecretCommands::Get { key } => match vault::get_secret(&key) {
-                Ok(val) => println!("{}", val),
-                Err(e) => {
-                    eprintln!("Error reading secret '{}': {}", key, e);
+            SecretCommands::Get { key } => {
+                if let Err(msg) = vault::validate_key_name(&key) {
+                    eprintln!("Error: {}", msg);
                     exit(1);
                 }
-            },
-            SecretCommands::Delete { key } => match vault::delete_secret(&key) {
-                Ok(_) => println!("Secret '{}' removed from OS Keyring.", key),
-                Err(e) => {
-                    eprintln!("Error deleting secret '{}': {}", key, e);
+                match vault::get_secret(&key) {
+                    Ok(val) => println!("{}", val),
+                    Err(e) => {
+                        eprintln!("Error reading secret '{}': {}", key, e);
+                        exit(1);
+                    }
+                }
+            }
+            SecretCommands::Delete { key } => {
+                if let Err(msg) = vault::validate_key_name(&key) {
+                    eprintln!("Error: {}", msg);
                     exit(1);
                 }
-            },
+                match vault::delete_secret(&key) {
+                    Ok(_) => println!("Secret '{}' removed from OS Keyring.", key),
+                    Err(e) => {
+                        eprintln!("Error deleting secret '{}': {}", key, e);
+                        exit(1);
+                    }
+                }
+            }
             SecretCommands::List => {
                 let keys = vault::list_keys();
                 if keys.is_empty() {
