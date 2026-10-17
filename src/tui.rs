@@ -2,7 +2,9 @@ use std::io;
 use std::time::Duration;
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -26,6 +28,7 @@ use crate::vault;
 pub enum FocusArea {
     Sidebar,
     Content,
+    Detail,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -238,6 +241,12 @@ pub enum ModalState {
         command: String,
         secrets: Vec<String>,
         created_at: String,
+    },
+    ViewProfile {
+        name: String,
+        description: Option<String>,
+        allow: Vec<String>,
+        deny: Vec<String>,
     },
     UpdateSecret {
         key: String,
@@ -558,6 +567,20 @@ impl App {
             }
         }
     }
+
+    pub fn open_view_profile_modal(&mut self) {
+        if let Some(i) = self.tool_profiles_state.selected() {
+            if let Some(prof) = self.tool_profiles.get(i) {
+                self.modal_scroll = 0;
+                self.modal = ModalState::ViewProfile {
+                    name: prof.name.clone(),
+                    description: prof.description.clone(),
+                    allow: prof.allow.clone(),
+                    deny: prof.deny.clone(),
+                };
+            }
+        }
+    }
 }
 
 impl Default for App {
@@ -569,7 +592,7 @@ impl Default for App {
 pub fn run_tui() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -578,7 +601,7 @@ pub fn run_tui() -> Result<(), Box<dyn std::error::Error>> {
     let res = main_loop(&mut terminal, &mut app);
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
 
     if let Err(err) = res {
@@ -600,13 +623,14 @@ fn main_loop<B: ratatui::backend::Backend>(
         }
 
         if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
 
-                match &mut app.modal {
-                    ModalState::AddSecret {
+                    match &mut app.modal {
+                        ModalState::AddSecret {
                         key: k,
                         value: v,
                         focus_value,
@@ -867,6 +891,29 @@ fn main_loop<B: ratatui::backend::Backend>(
                         _ => {}
                     },
 
+                    ModalState::ViewProfile { name, .. } => match key.code {
+                        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('v') => {
+                            app.modal = ModalState::None;
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            app.modal_scroll = app.modal_scroll.saturating_sub(1);
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            app.modal_scroll = app.modal_scroll.saturating_add(1);
+                        }
+                        KeyCode::PageUp => {
+                            app.modal_scroll = app.modal_scroll.saturating_sub(4);
+                        }
+                        KeyCode::PageDown => {
+                            app.modal_scroll = app.modal_scroll.saturating_add(4);
+                        }
+                        KeyCode::Char('d') | KeyCode::Delete => {
+                            let full_name = name.clone();
+                            app.modal = ModalState::ConfirmDeleteProfile(full_name);
+                        }
+                        _ => {}
+                    },
+
                     ModalState::UpdateSecret { key: k, value: v } => match key.code {
                         KeyCode::Esc => {
                             app.modal = ModalState::None;
@@ -982,6 +1029,12 @@ fn main_loop<B: ratatui::backend::Backend>(
                                     app.sidebar_down();
                                     app.detail_scroll = 0;
                                 }
+                                KeyCode::PageUp => {
+                                    app.detail_scroll = app.detail_scroll.saturating_sub(4);
+                                }
+                                KeyCode::PageDown => {
+                                    app.detail_scroll = app.detail_scroll.saturating_add(4);
+                                }
                                 KeyCode::Enter => {
                                     if let Some((action, _, _)) =
                                         SIDEBAR_MENU.get(app.sidebar_index)
@@ -989,7 +1042,11 @@ fn main_loop<B: ratatui::backend::Backend>(
                                         match action {
                                             SidebarAction::Tab(tab) => {
                                                 app.current_tab = *tab;
-                                                app.focus = FocusArea::Content;
+                                                if *tab == AppTab::System {
+                                                    app.focus = FocusArea::Detail;
+                                                } else {
+                                                    app.focus = FocusArea::Content;
+                                                }
                                                 app.detail_scroll = 0;
                                             }
                                             SidebarAction::AddSecret => {
@@ -1015,7 +1072,11 @@ fn main_loop<B: ratatui::backend::Backend>(
                                     }
                                 }
                                 KeyCode::Right | KeyCode::Tab => {
-                                    app.focus = FocusArea::Content;
+                                    if app.current_tab == AppTab::System {
+                                        app.focus = FocusArea::Detail;
+                                    } else {
+                                        app.focus = FocusArea::Content;
+                                    }
                                 }
                                 KeyCode::Esc => {
                                     app.should_quit = true;
@@ -1026,6 +1087,13 @@ fn main_loop<B: ratatui::backend::Backend>(
                             FocusArea::Content => match key.code {
                                 KeyCode::Left | KeyCode::BackTab | KeyCode::Esc => {
                                     app.focus = FocusArea::Sidebar;
+                                }
+                                KeyCode::Right => {
+                                    if app.current_tab == AppTab::ToolProfiles
+                                        || app.current_tab == AppTab::Secrets
+                                    {
+                                        app.focus = FocusArea::Detail;
+                                    }
                                 }
                                 KeyCode::Up | KeyCode::Char('k') => {
                                     app.content_up();
@@ -1040,17 +1108,24 @@ fn main_loop<B: ratatui::backend::Backend>(
                                     app.detail_scroll = app.detail_scroll.saturating_add(4);
                                 }
                                 KeyCode::Tab => {
-                                    app.focus = FocusArea::Sidebar;
+                                    if app.current_tab == AppTab::ToolProfiles
+                                        || app.current_tab == AppTab::Secrets
+                                    {
+                                        app.focus = FocusArea::Detail;
+                                    } else {
+                                        app.focus = FocusArea::Sidebar;
+                                    }
                                 }
                                 KeyCode::Enter => match app.current_tab {
                                     AppTab::Secrets => app.open_reveal_modal(),
                                     AppTab::Permissions => app.open_view_grant_modal(),
-                                    AppTab::ToolProfiles => {}
+                                    AppTab::ToolProfiles => app.open_view_profile_modal(),
                                     AppTab::System => {}
                                 },
                                 KeyCode::Char('v') => match app.current_tab {
                                     AppTab::Secrets => app.open_reveal_modal(),
                                     AppTab::Permissions => app.open_view_grant_modal(),
+                                    AppTab::ToolProfiles => app.open_view_profile_modal(),
                                     _ => {}
                                 },
                                 KeyCode::Char('e') if app.current_tab == AppTab::Secrets => {
@@ -1064,9 +1139,77 @@ fn main_loop<B: ratatui::backend::Backend>(
                                 },
                                 _ => {}
                             },
+
+                            FocusArea::Detail => match key.code {
+                                KeyCode::Left | KeyCode::BackTab | KeyCode::Esc => {
+                                    if app.current_tab == AppTab::System {
+                                        app.focus = FocusArea::Sidebar;
+                                    } else {
+                                        app.focus = FocusArea::Content;
+                                    }
+                                }
+                                KeyCode::Tab => {
+                                    app.focus = FocusArea::Sidebar;
+                                }
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    app.detail_scroll = app.detail_scroll.saturating_sub(1);
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    app.detail_scroll = app.detail_scroll.saturating_add(1);
+                                }
+                                KeyCode::PageUp => {
+                                    app.detail_scroll = app.detail_scroll.saturating_sub(4);
+                                }
+                                KeyCode::PageDown => {
+                                    app.detail_scroll = app.detail_scroll.saturating_add(4);
+                                }
+                                KeyCode::Home => {
+                                    app.detail_scroll = 0;
+                                }
+                                KeyCode::End => {
+                                    app.detail_scroll = app.detail_scroll.saturating_add(20);
+                                }
+                                KeyCode::Enter | KeyCode::Char('v') => match app.current_tab {
+                                    AppTab::ToolProfiles => app.open_view_profile_modal(),
+                                    AppTab::Secrets => app.open_reveal_modal(),
+                                    _ => {}
+                                },
+                                KeyCode::Char('d') | KeyCode::Delete
+                                    if app.current_tab == AppTab::ToolProfiles =>
+                                {
+                                    app.open_delete_profile_modal();
+                                }
+                                KeyCode::Char('d') | KeyCode::Delete
+                                    if app.current_tab == AppTab::Secrets =>
+                                {
+                                    app.open_delete_modal();
+                                }
+                                _ => {}
+                            },
                         }
                     }
                 }
+            }
+        Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::ScrollDown => match &mut app.modal {
+                        ModalState::None => {
+                            app.detail_scroll = app.detail_scroll.saturating_add(2);
+                        }
+                        _ => {
+                            app.modal_scroll = app.modal_scroll.saturating_add(2);
+                        }
+                    },
+                    MouseEventKind::ScrollUp => match &mut app.modal {
+                        ModalState::None => {
+                            app.detail_scroll = app.detail_scroll.saturating_sub(2);
+                        }
+                        _ => {
+                            app.modal_scroll = app.modal_scroll.saturating_sub(2);
+                        }
+                    },
+                    _ => {}
+                },
+                _ => {}
             }
         }
     }
@@ -1076,7 +1219,13 @@ fn ui(f: &mut Frame, app: &mut App) {
     let size = f.area();
 
     // Responsive header & footer height
-    let header_height = if size.height < 20 { 1 } else { 3 };
+    let header_height = if size.height < 12 {
+        0
+    } else if size.height < 20 {
+        1
+    } else {
+        3
+    };
     let footer_height = if size.height < 16 { 1 } else { 2 };
 
     let chunks = Layout::default()
@@ -1276,6 +1425,7 @@ fn render_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_secrets_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let is_focused = app.focus == FocusArea::Content;
+    let is_detail_focused = app.focus == FocusArea::Detail;
     let border_color = if is_focused {
         Color::Cyan
     } else {
@@ -1351,13 +1501,31 @@ fn render_secrets_tab(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, chunks[0], &mut app.secrets_state);
 
     // Right: Selected Secret Detail Card
+    let detail_border_color = if is_detail_focused {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
+
+    let detail_title = if is_detail_focused {
+        " [ Secret Detail & Operations — Scroll: Up/Down/Wheel ] "
+    } else if is_focused {
+        " Secret Detail & Operations [Right: Scroll Details] "
+    } else {
+        " Secret Detail & Operations "
+    };
+
     let detail_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(detail_border_color))
         .title(Span::styled(
-            " Secret Detail & Operations ",
-            Style::default().fg(Color::White).bold(),
+            detail_title,
+            if is_detail_focused {
+                Style::default().fg(Color::Cyan).bold()
+            } else {
+                Style::default().fg(Color::White).bold()
+            },
         ));
 
     if let Some(i) = app.secrets_state.selected() {
@@ -1568,6 +1736,8 @@ fn render_permissions_tab(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_tool_profiles_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let is_focused = app.focus == FocusArea::Content;
+    let is_detail_focused = app.focus == FocusArea::Detail;
+
     let border_color = if is_focused {
         Color::Cyan
     } else {
@@ -1650,13 +1820,31 @@ fn render_tool_profiles_tab(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, chunks[0], &mut app.tool_profiles_state);
 
     // Right: Selected Profile Details
+    let detail_border_color = if is_detail_focused {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
+
+    let detail_title = if is_detail_focused {
+        " [ Profile Security Specification — Scroll: Up/Down/Wheel | Enter: Full Modal ] "
+    } else if is_focused {
+        " Profile Security Specification [Right: Scroll | Enter: Full Modal] "
+    } else {
+        " Profile Security Specification [Right/Tab to View & Scroll] "
+    };
+
     let detail_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(detail_border_color))
         .title(Span::styled(
-            " Profile Security Specification ",
-            Style::default().fg(Color::White).bold(),
+            detail_title,
+            if is_detail_focused {
+                Style::default().fg(Color::Cyan).bold()
+            } else {
+                Style::default().fg(Color::White).bold()
+            },
         ));
 
     if let Some(i) = app.tool_profiles_state.selected() {
@@ -1747,6 +1935,12 @@ fn render_tool_profiles_tab(f: &mut Frame, app: &mut App, area: Rect) {
                 ),
             ]));
 
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Controls: [Up/Down/Wheel] Scroll  |  [Enter/v] Full Modal  |  [Left] List",
+                Style::default().fg(Color::DarkGray),
+            )));
+
             let p_detail = Paragraph::new(lines)
                 .block(detail_block)
                 .scroll((app.detail_scroll, 0))
@@ -1770,13 +1964,26 @@ fn render_tool_profiles_tab(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn render_system_tab(f: &mut Frame, app: &mut App, area: Rect) {
+    let is_detail_focused = app.focus == FocusArea::Detail;
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(if is_detail_focused {
+            Color::Cyan
+        } else {
+            Color::DarkGray
+        }))
         .title(Span::styled(
-            " [ MCP Sentinel — Security & System Architecture ] ",
-            Style::default().fg(Color::Cyan).bold(),
+            if is_detail_focused {
+                " [ MCP Sentinel — Security & System Architecture — Scroll: Up/Down/Wheel ] "
+            } else {
+                " MCP Sentinel — Security & System Architecture [Right/Tab to Scroll] "
+            },
+            if is_detail_focused {
+                Style::default().fg(Color::Cyan).bold()
+            } else {
+                Style::default().fg(Color::White).bold()
+            },
         ));
 
     let mut lines = Vec::new();
@@ -1950,18 +2157,34 @@ fn render_footer(f: &mut Frame, app: &mut App, area: Rect) {
         .split(area);
 
     let tips = match app.focus {
-        FocusArea::Sidebar => "[Up/Down] Menu  [Enter] Select  [Right/Tab] Enter View  [q] Quit",
+        FocusArea::Sidebar => {
+            "[Up/Down] Menu  [Right/Enter] Enter View  [PgUp/Dn/Wheel] Scroll  [q] Quit"
+        }
         FocusArea::Content => match app.current_tab {
             AppTab::Secrets => {
-                "[Up/Down] Select  [Enter/v] Reveal  [e] Edit  [d] Delete  [PgUp/Dn] Scroll  [Left/Esc] Menu"
+                "[Up/Down] Secret  [Right] Scroll Details  [Enter/v] Reveal  [Left] Menu"
             }
             AppTab::Permissions => {
-                "[Up/Down] Select  [Enter/v] Details  [d] Revoke  [x] Reset  [Left/Esc] Menu"
+                "[Up/Down] Select  [Enter/v] Full Details  [d] Revoke  [x] Reset  [Left] Menu"
             }
             AppTab::ToolProfiles => {
-                "[Up/Down] Select  [d] Delete Custom  [PgUp/Dn] Scroll  [Left/Esc] Menu"
+                "[Up/Down] Profile  [Right] Scroll Rules  [Enter/v] Full Modal  [Left] Menu"
             }
-            AppTab::System => "[Up/Down/PgUp/Dn] Scroll  [Left/Esc] Menu  [q] Quit",
+            AppTab::System => "[Up/Down/PgUp/Dn/Wheel] Scroll Overview  [Left/Esc] Menu  [q] Quit",
+        },
+        FocusArea::Detail => match app.current_tab {
+            AppTab::Secrets => {
+                "[Up/Down/Wheel] Scroll Text  [Enter/v] Reveal Modal  [Left/Esc] Back to List"
+            }
+            AppTab::Permissions => {
+                "[Up/Down/Wheel] Scroll Grants  [Enter/v] Full Details  [Left/Esc] Back"
+            }
+            AppTab::ToolProfiles => {
+                "[Up/Down/Wheel] Scroll Rules  [Enter/v] Full Modal  [Left/Esc] Back to List"
+            }
+            AppTab::System => {
+                "[Up/Down/Wheel] Scroll Overview  [Left/Esc] Back to Menu  [q] Quit"
+            }
         },
     };
 
@@ -2325,6 +2548,115 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "[Up/Down/PgUp/Dn] Scroll  |  [d] Revoke  |  [Esc/Enter] Close",
+                Style::default().fg(Color::DarkGray),
+            )));
+
+            let p = Paragraph::new(lines)
+                .style(modal_bg)
+                .scroll((app.modal_scroll, 0))
+                .wrap(Wrap { trim: true });
+
+            f.render_widget(p, inner);
+        }
+
+        ModalState::ViewProfile {
+            name,
+            description,
+            allow,
+            deny,
+        } => {
+            let popup_area = centered_rect_exact(76, 18, area);
+            f.render_widget(Clear, popup_area);
+
+            let is_builtin = name == "read-only" || name == "no-destructive";
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .style(modal_bg)
+                .title(Span::styled(
+                    format!(" [ Profile Security Specification: {} ] ", name),
+                    Style::default().fg(Color::Yellow).bold(),
+                ));
+
+            let inner = block.inner(popup_area);
+            f.render_widget(block, popup_area);
+
+            let mut lines = Vec::new();
+            lines.push(Line::from(vec![
+                Span::styled("Profile Name:     ", Style::default().fg(Color::DarkGray)),
+                Span::styled(name, Style::default().fg(Color::Yellow).bold()),
+                Span::raw("  "),
+                if is_builtin {
+                    Span::styled("[ BUILT-IN PRESET ]", Style::default().fg(Color::Cyan).bold())
+                } else {
+                    Span::styled("[ CUSTOM PROFILE ]", Style::default().fg(Color::Green).bold())
+                },
+            ]));
+
+            let desc = description.as_deref().unwrap_or("(No description provided)");
+            lines.push(Line::from(vec![
+                Span::styled("Description:      ", Style::default().fg(Color::DarkGray)),
+                Span::styled(desc, Style::default().fg(Color::White)),
+            ]));
+
+            lines.push(Line::from(vec![
+                Span::styled("Enforcement:      ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "Layer 7 JSON-RPC Interceptor & Drop",
+                    Style::default().fg(Color::Cyan),
+                ),
+            ]));
+            lines.push(Line::from(""));
+
+            lines.push(Line::from(Span::styled(
+                "Allowed Tool Patterns (Whitelist):",
+                Style::default().fg(Color::Green).bold(),
+            )));
+            if allow.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  (None - all tools denied unless permitted)",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                for pat in allow {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ✓ ", Style::default().fg(Color::Green).bold()),
+                        Span::styled(pat, Style::default().fg(Color::White)),
+                    ]));
+                }
+            }
+            lines.push(Line::from(""));
+
+            lines.push(Line::from(Span::styled(
+                "Denied Tool Patterns (Blacklist - Strict Precedence):",
+                Style::default().fg(Color::Red).bold(),
+            )));
+            if deny.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  (None - no tools blacklisted)",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                for pat in deny {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ✗ ", Style::default().fg(Color::Red).bold()),
+                        Span::styled(pat, Style::default().fg(Color::Red)),
+                    ]));
+                }
+            }
+            lines.push(Line::from(""));
+
+            lines.push(Line::from(vec![
+                Span::styled("CLI Run Usage:    ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("mcp-sentinel run --profile {} -- <command>", name),
+                    Style::default().fg(Color::Rgb(140, 200, 255)),
+                ),
+            ]));
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "[Up/Down/PgUp/Dn/Wheel] Scroll  |  [Esc/Enter] Close",
                 Style::default().fg(Color::DarkGray),
             )));
 
