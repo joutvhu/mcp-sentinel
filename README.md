@@ -303,15 +303,18 @@ Launch the interactive Terminal User Interface (TUI) Dashboard for visual secret
 mcp-sentinel ui
 ```
 
-* **Keyboard Shortcuts:**
-  * `[Tab]` / `[Shift+Tab]`: Switch tabs (`[1] 🔐 Secrets Vault`, `[2] 🛡️ Active Permissions`, `[3] ℹ️ System Status`)
-  * `[↑]` / `[↓]`: Select secret or granted permission
-  * `[v]`: Reveal secret value in modal dialog
-  * `[a]`: Add new secret directly to OS Keyring
-  * `[d]`: Delete secret or revoke permission
-  * `[x]`: Reset all permissions
+* **Keyboard Navigation & Shortcuts:**
+  * `[↑]` / `[↓]`: Navigate menu items in the Sidebar, or items in the Content view
+  * `[Enter]`: Select menu item, reveal secret, or trigger action
+  * `[→]` / `[Tab]`: Enter content view from sidebar
+  * `[←]` / `[Esc]`: Return focus to sidebar menu
+  * `[1]` / `[2]` / `[3]`: Quick jump to Secrets Vault, Permissions, or System Status
+  * `[a]`: Add new secret to OS Keyring
+  * `[v]`: Reveal selected secret value in modal dialog
+  * `[d]` / `[Delete]`: Delete secret or revoke permission
   * `[r]`: Reload from OS Vault
-  * `[q]` / `[Esc]`: Quit dashboard
+  * `[x]`: Reset all permissions
+  * `[q]`: Quit dashboard
 
 ---
 

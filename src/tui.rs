@@ -9,12 +9,11 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
-    symbols,
+    style::{Color, Style, Stylize},
     text::{Line, Span},
     widgets::{
         Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Row, Table,
-        TableState, Tabs, Wrap,
+        TableState, Wrap,
     },
     Frame, Terminal,
 };
@@ -22,12 +21,41 @@ use ratatui::{
 use crate::policy::{self, PolicyFile};
 use crate::vault;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FocusArea {
+    Sidebar,
+    Content,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AppTab {
     Secrets = 0,
     Permissions = 1,
     System = 2,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SidebarAction {
+    Tab(AppTab),
+    AddSecret,
+    RefreshVault,
+    ResetGrants,
+    Quit,
+}
+
+pub const SIDEBAR_MENU: &[(SidebarAction, &str, &str)] = &[
+    (SidebarAction::Tab(AppTab::Secrets), "Secrets Vault", "[1]"),
+    (
+        SidebarAction::Tab(AppTab::Permissions),
+        "Permissions (TOFU)",
+        "[2]",
+    ),
+    (SidebarAction::Tab(AppTab::System), "System Status", "[3]"),
+    (SidebarAction::AddSecret, "Add Secret", "[a]"),
+    (SidebarAction::RefreshVault, "Refresh Data", "[r]"),
+    (SidebarAction::ResetGrants, "Reset Permissions", "[x]"),
+    (SidebarAction::Quit, "Quit Dashboard", "[q]"),
+];
 
 pub enum ModalState {
     None,
@@ -46,7 +74,9 @@ pub enum ModalState {
 }
 
 pub struct App {
+    pub focus: FocusArea,
     pub current_tab: AppTab,
+    pub sidebar_index: usize,
     pub secrets: Vec<String>,
     pub secrets_state: ListState,
     pub policy: PolicyFile,
@@ -60,7 +90,9 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         let mut app = Self {
+            focus: FocusArea::Sidebar,
             current_tab: AppTab::Secrets,
+            sidebar_index: 0,
             secrets: Vec::new(),
             secrets_state: ListState::default(),
             policy: PolicyFile::default(),
@@ -68,7 +100,7 @@ impl App {
             permissions_state: TableState::default(),
             modal: ModalState::None,
             status_message: Some((
-                "Welcome to MCP Sentinel Dashboard. Press [Tab] to navigate.".to_string(),
+                "Use [Up/Down] arrows to navigate menu, [Enter] to select.".to_string(),
                 Color::Cyan,
             )),
             should_quit: false,
@@ -126,23 +158,55 @@ impl App {
         }
     }
 
-    pub fn next_tab(&mut self) {
-        self.current_tab = match self.current_tab {
-            AppTab::Secrets => AppTab::Permissions,
-            AppTab::Permissions => AppTab::System,
-            AppTab::System => AppTab::Secrets,
-        };
+    pub fn sidebar_up(&mut self) {
+        if self.sidebar_index > 0 {
+            self.sidebar_index -= 1;
+        } else {
+            self.sidebar_index = SIDEBAR_MENU.len() - 1;
+        }
+        self.sync_sidebar_tab();
     }
 
-    pub fn prev_tab(&mut self) {
-        self.current_tab = match self.current_tab {
-            AppTab::Secrets => AppTab::System,
-            AppTab::Permissions => AppTab::Secrets,
-            AppTab::System => AppTab::Permissions,
-        };
+    pub fn sidebar_down(&mut self) {
+        if self.sidebar_index + 1 < SIDEBAR_MENU.len() {
+            self.sidebar_index += 1;
+        } else {
+            self.sidebar_index = 0;
+        }
+        self.sync_sidebar_tab();
     }
 
-    pub fn next_item(&mut self) {
+    fn sync_sidebar_tab(&mut self) {
+        if let Some((SidebarAction::Tab(tab), _, _)) = SIDEBAR_MENU.get(self.sidebar_index) {
+            self.current_tab = *tab;
+        }
+    }
+
+    pub fn content_up(&mut self) {
+        match self.current_tab {
+            AppTab::Secrets => {
+                if !self.secrets.is_empty() {
+                    let prev = match self.secrets_state.selected() {
+                        Some(i) if i > 0 => i - 1,
+                        _ => self.secrets.len() - 1,
+                    };
+                    self.secrets_state.select(Some(prev));
+                }
+            }
+            AppTab::Permissions => {
+                if !self.grants_list.is_empty() {
+                    let prev = match self.permissions_state.selected() {
+                        Some(i) if i > 0 => i - 1,
+                        _ => self.grants_list.len() - 1,
+                    };
+                    self.permissions_state.select(Some(prev));
+                }
+            }
+            AppTab::System => {}
+        }
+    }
+
+    pub fn content_down(&mut self) {
         match self.current_tab {
             AppTab::Secrets => {
                 if !self.secrets.is_empty() {
@@ -166,27 +230,43 @@ impl App {
         }
     }
 
-    pub fn prev_item(&mut self) {
-        match self.current_tab {
-            AppTab::Secrets => {
-                if !self.secrets.is_empty() {
-                    let prev = match self.secrets_state.selected() {
-                        Some(i) if i > 0 => i - 1,
-                        _ => self.secrets.len() - 1,
-                    };
-                    self.secrets_state.select(Some(prev));
+    pub fn open_reveal_modal(&mut self) {
+        if let Some(i) = self.secrets_state.selected() {
+            if let Some(key_name) = self.secrets.get(i) {
+                match vault::get_secret(key_name) {
+                    Ok(val) => {
+                        self.modal = ModalState::RevealSecret {
+                            key: key_name.clone(),
+                            value: val,
+                        };
+                    }
+                    Err(e) => {
+                        self.status_message =
+                            Some((format!("Error reading secret: {}", e), Color::Red));
+                    }
                 }
             }
-            AppTab::Permissions => {
-                if !self.grants_list.is_empty() {
-                    let prev = match self.permissions_state.selected() {
-                        Some(i) if i > 0 => i - 1,
-                        _ => self.grants_list.len() - 1,
-                    };
-                    self.permissions_state.select(Some(prev));
+        }
+    }
+
+    pub fn open_delete_modal(&mut self) {
+        if let Some(i) = self.secrets_state.selected() {
+            if let Some(key_name) = self.secrets.get(i) {
+                self.modal = ModalState::ConfirmDeleteSecret(key_name.clone());
+            }
+        }
+    }
+
+    pub fn open_revoke_modal(&mut self) {
+        if let Some(i) = self.permissions_state.selected() {
+            if let Some((id, _, _, _)) = self.grants_list.get(i) {
+                for full_id in self.policy.grants.keys() {
+                    if full_id.starts_with(id) {
+                        self.modal = ModalState::ConfirmRevokeGrant(full_id.clone());
+                        break;
+                    }
                 }
             }
-            AppTab::System => {}
         }
     }
 }
@@ -236,7 +316,6 @@ fn main_loop<B: ratatui::backend::Backend>(
                     continue;
                 }
 
-                // Handle active modal events first
                 match &mut app.modal {
                     ModalState::AddSecret {
                         key: k,
@@ -254,13 +333,14 @@ fn main_loop<B: ratatui::backend::Backend>(
                         KeyCode::Enter => {
                             let key_trimmed = k.trim().to_string();
                             let val_trimmed = v.trim().to_string();
-                            if let Err(msg) = vault::validate_key_name(&key_trimmed) {
-                                app.status_message = Some((format!("Error: {}", msg), Color::Red));
-                            } else if val_trimmed.is_empty() {
+
+                            if key_trimmed.is_empty() {
                                 app.status_message = Some((
-                                    "Error: Secret value cannot be empty.".to_string(),
+                                    "Error: Secret key name cannot be empty.".to_string(),
                                     Color::Red,
                                 ));
+                            } else if let Err(err_msg) = vault::validate_key_name(&key_trimmed) {
+                                app.status_message = Some((err_msg, Color::Red));
                             } else {
                                 match vault::set_secret(&key_trimmed, &val_trimmed) {
                                     Ok(_) => {
@@ -268,7 +348,7 @@ fn main_loop<B: ratatui::backend::Backend>(
                                         app.modal = ModalState::None;
                                         app.status_message = Some((
                                             format!(
-                                                "✓ Secret '{}' saved successfully in OS Vault!",
+                                                "✓ Secret '{}' saved in OS Vault!",
                                                 key_trimmed
                                             ),
                                             Color::Green,
@@ -336,7 +416,7 @@ fn main_loop<B: ratatui::backend::Backend>(
                                     app.modal = ModalState::None;
                                     app.status_message = Some((
                                         format!(
-                                            "✓ Permission '{}' revoked successfully.",
+                                            "✓ Permission '{}' revoked.",
                                             &id[..id.len().min(12)]
                                         ),
                                         Color::Green,
@@ -366,8 +446,7 @@ fn main_loop<B: ratatui::backend::Backend>(
                                     app.reload_permissions();
                                     app.modal = ModalState::None;
                                     app.status_message = Some((
-                                        "✓ All granted permissions have been wiped (Reset)."
-                                            .to_string(),
+                                        "✓ All granted permissions have been reset.".to_string(),
                                         Color::Green,
                                     ));
                                 }
@@ -396,105 +475,134 @@ fn main_loop<B: ratatui::backend::Backend>(
                     },
 
                     ModalState::None => {
-                        // Global navigation keys
+                        // Global shortcuts
                         match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc => {
+                            KeyCode::Char('q') => {
                                 app.should_quit = true;
-                            }
-                            KeyCode::Tab => {
-                                app.next_tab();
-                            }
-                            KeyCode::BackTab => {
-                                app.prev_tab();
+                                return Ok(());
                             }
                             KeyCode::Char('1') => {
                                 app.current_tab = AppTab::Secrets;
+                                app.sidebar_index = 0;
+                                app.focus = FocusArea::Content;
+                                continue;
                             }
                             KeyCode::Char('2') => {
                                 app.current_tab = AppTab::Permissions;
+                                app.sidebar_index = 1;
+                                app.focus = FocusArea::Content;
+                                continue;
                             }
                             KeyCode::Char('3') => {
                                 app.current_tab = AppTab::System;
+                                app.sidebar_index = 2;
+                                app.focus = FocusArea::Content;
+                                continue;
                             }
-                            KeyCode::Down | KeyCode::Char('j') => {
-                                app.next_item();
-                            }
-                            KeyCode::Up | KeyCode::Char('k') => {
-                                app.prev_item();
-                            }
-
-                            // Secrets Tab Actions
-                            KeyCode::Char('a') if app.current_tab == AppTab::Secrets => {
+                            KeyCode::Char('a') => {
                                 app.modal = ModalState::AddSecret {
                                     key: String::new(),
                                     value: String::new(),
                                     focus_value: false,
                                 };
+                                continue;
                             }
-                            KeyCode::Char('v') | KeyCode::Enter
-                                if app.current_tab == AppTab::Secrets =>
-                            {
-                                if let Some(i) = app.secrets_state.selected() {
-                                    if let Some(key_name) = app.secrets.get(i) {
-                                        match vault::get_secret(key_name) {
-                                            Ok(val) => {
-                                                app.modal = ModalState::RevealSecret {
-                                                    key: key_name.clone(),
-                                                    value: val,
-                                                };
-                                            }
-                                            Err(e) => {
-                                                app.status_message = Some((
-                                                    format!("Error reading secret: {}", e),
-                                                    Color::Red,
-                                                ));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            KeyCode::Char('d') | KeyCode::Delete
-                                if app.current_tab == AppTab::Secrets =>
-                            {
-                                if let Some(i) = app.secrets_state.selected() {
-                                    if let Some(key_name) = app.secrets.get(i) {
-                                        app.modal =
-                                            ModalState::ConfirmDeleteSecret(key_name.clone());
-                                    }
-                                }
-                            }
-                            KeyCode::Char('r') if app.current_tab == AppTab::Secrets => {
+                            KeyCode::Char('r') => {
                                 app.reload_secrets();
-                                app.status_message =
-                                    Some(("Secrets list refreshed.".to_string(), Color::Cyan));
-                            }
-
-                            // Permissions Tab Actions
-                            KeyCode::Char('d') | KeyCode::Delete
-                                if app.current_tab == AppTab::Permissions =>
-                            {
-                                if let Some(i) = app.permissions_state.selected() {
-                                    if let Some((id, _, _, _)) = app.grants_list.get(i) {
-                                        // Find full id
-                                        for full_id in app.policy.grants.keys() {
-                                            if full_id.starts_with(id) {
-                                                app.modal =
-                                                    ModalState::ConfirmRevokeGrant(full_id.clone());
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            KeyCode::Char('x') if app.current_tab == AppTab::Permissions => {
-                                app.modal = ModalState::ConfirmResetGrants;
-                            }
-                            KeyCode::Char('r') if app.current_tab == AppTab::Permissions => {
                                 app.reload_permissions();
-                                app.status_message =
-                                    Some(("Permissions policy reloaded.".to_string(), Color::Cyan));
+                                app.status_message = Some((
+                                    "✓ Vault and policies reloaded.".to_string(),
+                                    Color::Cyan,
+                                ));
+                                continue;
+                            }
+                            KeyCode::Char('x') => {
+                                app.modal = ModalState::ConfirmResetGrants;
+                                continue;
                             }
                             _ => {}
+                        }
+
+                        // Focus-dependent navigation
+                        match app.focus {
+                            FocusArea::Sidebar => match key.code {
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    app.sidebar_up();
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    app.sidebar_down();
+                                }
+                                KeyCode::Enter => {
+                                    if let Some((action, _, _)) =
+                                        SIDEBAR_MENU.get(app.sidebar_index)
+                                    {
+                                        match action {
+                                            SidebarAction::Tab(tab) => {
+                                                app.current_tab = *tab;
+                                                app.focus = FocusArea::Content;
+                                            }
+                                            SidebarAction::AddSecret => {
+                                                app.modal = ModalState::AddSecret {
+                                                    key: String::new(),
+                                                    value: String::new(),
+                                                    focus_value: false,
+                                                };
+                                            }
+                                            SidebarAction::RefreshVault => {
+                                                app.reload_secrets();
+                                                app.reload_permissions();
+                                                app.status_message = Some((
+                                                    "✓ Vault and permissions refreshed."
+                                                        .to_string(),
+                                                    Color::Cyan,
+                                                ));
+                                            }
+                                            SidebarAction::ResetGrants => {
+                                                app.modal = ModalState::ConfirmResetGrants;
+                                            }
+                                            SidebarAction::Quit => {
+                                                app.should_quit = true;
+                                            }
+                                        }
+                                    }
+                                }
+                                KeyCode::Right | KeyCode::Tab => {
+                                    app.focus = FocusArea::Content;
+                                }
+                                KeyCode::Esc => {
+                                    app.should_quit = true;
+                                }
+                                _ => {}
+                            },
+
+                            FocusArea::Content => match key.code {
+                                KeyCode::Left | KeyCode::BackTab | KeyCode::Esc => {
+                                    app.focus = FocusArea::Sidebar;
+                                }
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    app.content_up();
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    app.content_down();
+                                }
+                                KeyCode::Tab => {
+                                    app.focus = FocusArea::Sidebar;
+                                }
+                                KeyCode::Enter => match app.current_tab {
+                                    AppTab::Secrets => app.open_reveal_modal(),
+                                    AppTab::Permissions => app.open_revoke_modal(),
+                                    AppTab::System => {}
+                                },
+                                KeyCode::Char('v') if app.current_tab == AppTab::Secrets => {
+                                    app.open_reveal_modal();
+                                }
+                                KeyCode::Char('d') | KeyCode::Delete => match app.current_tab {
+                                    AppTab::Secrets => app.open_delete_modal(),
+                                    AppTab::Permissions => app.open_revoke_modal(),
+                                    AppTab::System => {}
+                                },
+                                _ => {}
+                            },
                         }
                     }
                 }
@@ -509,78 +617,182 @@ fn ui(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Header & Tabs
-            Constraint::Min(10),   // Main View Content
-            Constraint::Length(2), // Status & Footer
+            Constraint::Length(3), // Header Banner
+            Constraint::Min(10),   // Sidebar + Content
+            Constraint::Length(2), // Footer Keybinds & Status
         ])
         .split(size);
 
-    // 1. Header & Navigation Tabs
-    let tab_titles = vec![
-        Line::from(vec![Span::raw(" [1] 🔐 Secrets Vault ")]),
-        Line::from(vec![Span::raw(" [2] 🛡️ Active Permissions ")]),
-        Line::from(vec![Span::raw(" [3] ℹ️ System Status ")]),
-    ];
+    // 1. Top Header Banner
+    render_header(f, chunks[0]);
 
-    let tabs = Tabs::new(tab_titles)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .title(Span::styled(
-                    " 🛡️  MCP SENTINEL DASHBOARD (v0.1.0) ",
-                    Style::default().fg(Color::Cyan).bold(),
-                )),
-        )
-        .select(app.current_tab as usize)
-        .style(Style::default().fg(Color::DarkGray))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
-                .bg(Color::Rgb(20, 30, 45)),
-        )
-        .divider(symbols::line::VERTICAL);
+    // 2. Middle Body: Left Sidebar + Right Content View
+    let body_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(26), // Sidebar fixed width
+            Constraint::Min(40),    // Main content
+        ])
+        .split(chunks[1]);
 
-    f.render_widget(tabs, chunks[0]);
+    render_sidebar(f, app, body_chunks[0]);
 
-    // 2. Main View Content
     match app.current_tab {
-        AppTab::Secrets => render_secrets_tab(f, app, chunks[1]),
-        AppTab::Permissions => render_permissions_tab(f, app, chunks[1]),
-        AppTab::System => render_system_tab(f, app, chunks[1]),
+        AppTab::Secrets => render_secrets_tab(f, app, body_chunks[1]),
+        AppTab::Permissions => render_permissions_tab(f, app, body_chunks[1]),
+        AppTab::System => render_system_tab(f, app, body_chunks[1]),
     }
 
-    // 3. Footer / Help & Status Bar
+    // 3. Footer
     render_footer(f, app, chunks[2]);
 
-    // 4. Modals (Overlays)
+    // 4. Modals
     render_modals(f, app, size);
 }
 
+fn render_header(f: &mut Frame, area: Rect) {
+    let header_text = vec![Line::from(vec![
+        Span::styled(
+            " MCP SENTINEL ",
+            Style::default()
+                .fg(Color::Cyan)
+                .bold()
+                .bg(Color::Rgb(20, 30, 45)),
+        ),
+        Span::raw(" | "),
+        Span::styled(
+            "Zero-Trust Secret Vault & Security Proxy (v0.1.0)",
+            Style::default().fg(Color::White),
+        ),
+        Span::raw(" | "),
+        Span::styled("STDIO ISOLATED", Style::default().fg(Color::Green).bold()),
+    ])];
+
+    let header_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let header_p = Paragraph::new(header_text)
+        .block(header_block)
+        .alignment(Alignment::Center);
+
+    f.render_widget(header_p, area);
+}
+
+fn render_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
+    let is_focused = app.focus == FocusArea::Sidebar;
+
+    let border_color = if is_focused {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
+
+    let title_style = if is_focused {
+        Style::default().fg(Color::Cyan).bold()
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let mut items = Vec::new();
+
+    for (i, (action, label, shortcut)) in SIDEBAR_MENU.iter().enumerate() {
+        let is_selected = i == app.sidebar_index;
+
+        let prefix = if is_selected { "► " } else { "  " };
+
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .bg(Color::Rgb(30, 45, 65))
+                .bold()
+        } else {
+            match action {
+                SidebarAction::Tab(_) => Style::default().fg(Color::White),
+                SidebarAction::Quit => Style::default().fg(Color::Red),
+                _ => Style::default().fg(Color::Gray),
+            }
+        };
+
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(prefix, style),
+            Span::styled(format!("{:<15}", label), style),
+            Span::styled(
+                format!("{:>4}", shortcut),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])));
+    }
+
+    let sidebar_list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(border_color))
+            .title(Span::styled(
+                if is_focused {
+                    " [ MENU: Active ] "
+                } else {
+                    " [ MENU ] "
+                },
+                title_style,
+            )),
+    );
+
+    f.render_widget(sidebar_list, area);
+}
+
 fn render_secrets_tab(f: &mut Frame, app: &mut App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-        .split(area);
+    let is_focused = app.focus == FocusArea::Content;
+    let border_color = if is_focused {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
+
+    // If screen is wide enough, 2 columns; else stacked
+    let chunks = if area.width >= 70 {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area)
+    };
 
     // Left: Keys List
-    let items: Vec<ListItem> = app
-        .secrets
-        .iter()
-        .enumerate()
-        .map(|(i, key)| {
-            let prefix = if app.secrets_state.selected() == Some(i) {
-                " ▶ 🔑 "
-            } else {
-                "   🔑 "
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(Color::Yellow)),
-                Span::styled(key, Style::default().fg(Color::White).bold()),
-            ]))
-        })
-        .collect();
+    let items: Vec<ListItem> = if app.secrets.is_empty() {
+        vec![ListItem::new(Line::from(Span::styled(
+            "  (No secrets stored yet)",
+            Style::default().fg(Color::DarkGray),
+        )))]
+    } else {
+        app.secrets
+            .iter()
+            .enumerate()
+            .map(|(i, key)| {
+                let is_sel = app.secrets_state.selected() == Some(i);
+                let prefix = if is_sel { "► " } else { "  " };
+                let style = if is_sel {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .bg(Color::Rgb(30, 45, 65))
+                        .bold()
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(prefix, style),
+                    Span::styled(key, style),
+                ]))
+            })
+            .collect()
+    };
 
     let list_title = format!(" Stored Secrets ({}) ", app.secrets.len());
     let list = List::new(items)
@@ -588,16 +800,21 @@ fn render_secrets_tab(f: &mut Frame, app: &mut App, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(border_color))
                 .title(Span::styled(
                     list_title,
-                    Style::default().fg(Color::Green).bold(),
+                    if is_focused {
+                        Style::default().fg(Color::Cyan).bold()
+                    } else {
+                        Style::default().fg(Color::White)
+                    },
                 )),
         )
         .highlight_style(
             Style::default()
                 .bg(Color::Rgb(30, 45, 65))
                 .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+                .bold(),
         );
 
     f.render_stateful_widget(list, chunks[0], &mut app.secrets_state);
@@ -606,9 +823,10 @@ fn render_secrets_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let detail_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(
-            " Secret Detail ",
-            Style::default().fg(Color::Blue).bold(),
+            " Secret Detail & Operations ",
+            Style::default().fg(Color::White).bold(),
         ));
 
     if let Some(i) = app.secrets_state.selected() {
@@ -626,36 +844,60 @@ fn render_secrets_tab(f: &mut Frame, app: &mut App, area: Rect) {
                     ),
                 ]),
                 Line::from(vec![
-                    Span::styled("Service Name: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("mcp-sentinel", Style::default().fg(Color::White)),
+                    Span::styled("Status:       ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Hardware/OS Encrypted", Style::default().fg(Color::Yellow)),
                 ]),
                 Line::from(vec![
-                    Span::styled("Value:        ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Secret Value: ", Style::default().fg(Color::DarkGray)),
                     Span::styled(
-                        "••••••••••••••••  (Hidden for security)",
-                        Style::default().fg(Color::Yellow),
+                        "••••••••••••••••  (Protected)",
+                        Style::default().fg(Color::DarkGray),
                     ),
                 ]),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "Quick Actions:",
+                    "Actions for selected secret:",
                     Style::default().fg(Color::Magenta).bold(),
                 )),
                 Line::from(vec![
-                    Span::styled("  [v] ", Style::default().fg(Color::Yellow).bold()),
-                    Span::raw("Reveal Secret Value in Secure Modal"),
+                    Span::styled(
+                        " [Enter / v] ",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .bg(Color::Rgb(30, 41, 59))
+                            .bold(),
+                    ),
+                    Span::raw(" Reveal Value in Modal"),
                 ]),
                 Line::from(vec![
-                    Span::styled("  [d] ", Style::default().fg(Color::Red).bold()),
-                    Span::raw("Delete Secret from OS Vault"),
+                    Span::styled(
+                        " [Delete / d] ",
+                        Style::default()
+                            .fg(Color::Red)
+                            .bg(Color::Rgb(30, 41, 59))
+                            .bold(),
+                    ),
+                    Span::raw(" Delete from OS Vault"),
                 ]),
                 Line::from(vec![
-                    Span::styled("  [a] ", Style::default().fg(Color::Green).bold()),
-                    Span::raw("Add New Secret Key & Value"),
+                    Span::styled(
+                        " [a] ",
+                        Style::default()
+                            .fg(Color::Green)
+                            .bg(Color::Rgb(30, 41, 59))
+                            .bold(),
+                    ),
+                    Span::raw(" Add New Secret"),
                 ]),
                 Line::from(vec![
-                    Span::styled("  [r] ", Style::default().fg(Color::Cyan).bold()),
-                    Span::raw("Refresh List"),
+                    Span::styled(
+                        " [r] ",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .bg(Color::Rgb(30, 41, 59))
+                            .bold(),
+                    ),
+                    Span::raw(" Refresh List"),
                 ]),
             ];
 
@@ -670,14 +912,16 @@ fn render_secrets_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let empty_msg = Paragraph::new(vec![
         Line::from(""),
         Line::from(Span::styled(
-            "No secret selected or vault is empty.",
+            "No secrets stored in vault yet.",
             Style::default().fg(Color::DarkGray),
         )),
         Line::from(""),
         Line::from(vec![
             Span::raw("Press "),
             Span::styled("[a]", Style::default().fg(Color::Green).bold()),
-            Span::raw(" to store your first secret in the OS Keyring."),
+            Span::raw(" or select "),
+            Span::styled("'Add Secret'", Style::default().fg(Color::Cyan).bold()),
+            Span::raw(" in the menu to add one."),
         ]),
     ])
     .block(detail_block)
@@ -687,54 +931,69 @@ fn render_secrets_tab(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn render_permissions_tab(f: &mut Frame, app: &mut App, area: Rect) {
-    let rows: Vec<Row> = app
-        .grants_list
-        .iter()
-        .map(|(id, cmd, secrets, created)| {
-            Row::new(vec![
-                Span::styled(id, Style::default().fg(Color::Yellow).bold()),
-                Span::styled(cmd, Style::default().fg(Color::White)),
-                Span::styled(secrets, Style::default().fg(Color::Cyan)),
-                Span::styled(created, Style::default().fg(Color::DarkGray)),
-            ])
-            .height(1)
-        })
-        .collect();
+    let is_focused = app.focus == FocusArea::Content;
+    let border_color = if is_focused {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
 
-    let table_title = format!(" Authorized MCP Servers ({}) ", app.grants_list.len());
+    let rows: Vec<Row> = if app.grants_list.is_empty() {
+        Vec::new()
+    } else {
+        app.grants_list
+            .iter()
+            .map(|(id, cmd, secrets, created)| {
+                Row::new(vec![
+                    Span::styled(id, Style::default().fg(Color::Yellow).bold()),
+                    Span::styled(cmd, Style::default().fg(Color::White)),
+                    Span::styled(secrets, Style::default().fg(Color::Cyan)),
+                    Span::styled(created, Style::default().fg(Color::DarkGray)),
+                ])
+                .height(1)
+            })
+            .collect()
+    };
+
+    let title = format!(" Active TOFU Permissions ({}) ", app.grants_list.len());
+
     let table = Table::new(
         rows,
         [
             Constraint::Length(14),
-            Constraint::Percentage(45),
+            Constraint::Percentage(40),
             Constraint::Percentage(25),
             Constraint::Length(18),
         ],
     )
     .header(
         Row::new(vec![
-            "FINGERPRINT",
-            "MCP COMMAND / NAME",
-            "GRANTED SECRETS",
-            "APPROVED AT",
+            Span::styled("FINGERPRINT", Style::default().fg(Color::Cyan).bold()),
+            Span::styled("COMMAND / NAME", Style::default().fg(Color::Cyan).bold()),
+            Span::styled("GRANTED SECRETS", Style::default().fg(Color::Cyan).bold()),
+            Span::styled("CREATED DATE", Style::default().fg(Color::Cyan).bold()),
         ])
-        .style(Style::default().fg(Color::DarkGray).bold())
         .bottom_margin(1),
     )
     .block(
         Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(border_color))
             .title(Span::styled(
-                table_title,
-                Style::default().fg(Color::Green).bold(),
+                title,
+                if is_focused {
+                    Style::default().fg(Color::Cyan).bold()
+                } else {
+                    Style::default().fg(Color::White)
+                },
             )),
     )
     .highlight_style(
         Style::default()
             .bg(Color::Rgb(30, 45, 65))
             .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
+            .bold(),
     );
 
     f.render_stateful_widget(table, area, &mut app.permissions_state);
@@ -744,31 +1003,33 @@ fn render_system_tab(f: &mut Frame, _app: &mut App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(6),
-            Constraint::Length(7),
-            Constraint::Min(5),
+            Constraint::Length(7), // Vault
+            Constraint::Length(7), // Policy
+            Constraint::Min(6),    // Sandbox
         ])
         .split(area);
 
-    // Card 1: Vault Status
+    // Card 1: Vault
     let vault_lines = vec![
         Line::from(vec![
-            Span::styled("Vault Service:      ", Style::default().fg(Color::DarkGray)),
-            Span::styled("mcp-sentinel", Style::default().fg(Color::Cyan).bold()),
-            Span::styled(" (Hardware/OS Enclave)", Style::default().fg(Color::Green)),
-        ]),
-        Line::from(vec![
-            Span::styled("Supported OS:       ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Backend Engine:     ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                "Windows Credential Manager | macOS Keychain | Linux Secret Service",
-                Style::default().fg(Color::White),
+                "Windows Credential Manager / Apple Keychain / Linux SecretService",
+                Style::default().fg(Color::White).bold(),
             ),
         ]),
         Line::from(vec![
-            Span::styled("Zero-Plaintext:     ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Disk Exposure:      ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                "Active — No secrets are ever persisted in plaintext on disk.",
+                "ZERO Plaintext Secrets on Disk",
                 Style::default().fg(Color::Green).bold(),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Injection Vector:   ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "In-Memory Environment Injection strictly during exec()",
+                Style::default().fg(Color::Cyan),
             ),
         ]),
     ];
@@ -776,34 +1037,27 @@ fn render_system_tab(f: &mut Frame, _app: &mut App, area: Rect) {
         Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::DarkGray))
             .title(Span::styled(
-                " 🔐 OS Keyring Security Enclave ",
+                " [ 1. OS-Native Secret Vault ] ",
                 Style::default().fg(Color::Cyan).bold(),
             )),
     );
     f.render_widget(card1, chunks[0]);
 
-    // Card 2: TOFU & Policy Engine
-    let policy_path = policy::get_policy_file_path()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "Unknown".to_string());
-
+    // Card 2: Policy
     let policy_lines = vec![
         Line::from(vec![
-            Span::styled("Policy File Path:   ", Style::default().fg(Color::DarkGray)),
-            Span::styled(policy_path, Style::default().fg(Color::White)),
-        ]),
-        Line::from(vec![
-            Span::styled("Tamper Protection:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Integrity Guard:    ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                "HMAC-SHA256 Cryptographic Signature Verified",
+                "HMAC-SHA256 Cryptographic Signature on permissions.json",
                 Style::default().fg(Color::Green).bold(),
             ),
         ]),
         Line::from(vec![
             Span::styled("Master Entropy:     ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                "256-bit OS CSPRNG (Hardware Randomness)",
+                "256-bit Hardware-Generated CSPRNG Key stored in Keyring",
                 Style::default().fg(Color::Cyan),
             ),
         ]),
@@ -819,8 +1073,9 @@ fn render_system_tab(f: &mut Frame, _app: &mut App, area: Rect) {
         Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::DarkGray))
             .title(Span::styled(
-                " 🛡️ TOFU Policy & Cryptographic Integrity ",
+                " [ 2. TOFU Policy & Cryptographic Integrity ] ",
                 Style::default().fg(Color::Green).bold(),
             )),
     );
@@ -831,7 +1086,7 @@ fn render_system_tab(f: &mut Frame, _app: &mut App, area: Rect) {
         Line::from(vec![
             Span::styled("Environment Jail:   ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                "Default-Deny Whitelist (Host AWS, SSH, GITHUB keys purged)",
+                "Default-Deny Whitelist (AWS, SSH, GITHUB keys purged from child)",
                 Style::default().fg(Color::Green),
             ),
         ]),
@@ -849,20 +1104,14 @@ fn render_system_tab(f: &mut Frame, _app: &mut App, area: Rect) {
                 Style::default().fg(Color::Yellow),
             ),
         ]),
-        Line::from(vec![
-            Span::styled("Verified Quality:   ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                "38/38 Test Suites Passing (100% Zero Defect)",
-                Style::default().fg(Color::Green).bold(),
-            ),
-        ]),
     ];
     let card3 = Paragraph::new(sandbox_lines).block(
         Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::DarkGray))
             .title(Span::styled(
-                " ⚡ Subprocess Sandbox & Proxy Stream ",
+                " [ 3. Subprocess Sandbox & Proxy Stream ] ",
                 Style::default().fg(Color::Yellow).bold(),
             )),
     );
@@ -872,17 +1121,16 @@ fn render_system_tab(f: &mut Frame, _app: &mut App, area: Rect) {
 fn render_footer(f: &mut Frame, app: &mut App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
         .split(area);
 
-    let tips = match app.current_tab {
-        AppTab::Secrets => {
-            "[Tab] Tab  [↑/↓] Select  [v] Reveal  [a] Add  [d] Delete  [r] Refresh  [q] Quit"
-        }
-        AppTab::Permissions => {
-            "[Tab] Tab  [↑/↓] Select  [d] Revoke  [x] Reset All  [r] Refresh  [q] Quit"
-        }
-        AppTab::System => "[Tab] Switch Tab  [q / Esc] Quit Dashboard",
+    let tips = match app.focus {
+        FocusArea::Sidebar => "[Up/Down] Menu  [Enter] Select  [Right/Tab] Enter View  [q] Quit",
+        FocusArea::Content => match app.current_tab {
+            AppTab::Secrets => "[Up/Down] Select  [Enter/v] Reveal  [d] Delete  [Left/Esc] Menu",
+            AppTab::Permissions => "[Up/Down] Select  [Enter/d] Revoke  [x] Reset  [Left/Esc] Menu",
+            AppTab::System => "[Left/Esc] Back to Menu  [q] Quit",
+        },
     };
 
     let p_tips = Paragraph::new(Span::styled(tips, Style::default().fg(Color::DarkGray)));
@@ -896,6 +1144,8 @@ fn render_footer(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
+    let modal_bg = Style::default().bg(Color::Rgb(15, 23, 42)).fg(Color::White);
+
     match &app.modal {
         ModalState::None => {}
         ModalState::AddSecret {
@@ -903,14 +1153,15 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
             value,
             focus_value,
         } => {
-            let popup_area = centered_rect(60, 40, area);
+            let popup_area = centered_rect(60, 42, area);
             f.render_widget(Clear, popup_area);
 
             let block = Block::default()
                 .borders(Borders::ALL)
-                .border_type(BorderType::Double)
+                .border_type(BorderType::Rounded)
+                .style(modal_bg)
                 .title(Span::styled(
-                    " ➕ Add New Secret to OS Vault ",
+                    " [ Add New Secret to OS Vault ] ",
                     Style::default().fg(Color::Green).bold(),
                 ));
 
@@ -928,7 +1179,8 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 .split(inner_area);
 
             let hint =
-                Paragraph::new("Enter standard identifier (e.g. GITHUB_TOKEN) and secret value:");
+                Paragraph::new("Enter standard identifier (e.g. GITHUB_TOKEN) and secret value:")
+                    .style(modal_bg);
             f.render_widget(hint, chunks[0]);
 
             let key_style = if !*focus_value {
@@ -941,7 +1193,9 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 .border_type(BorderType::Rounded)
                 .title(" Key Name ")
                 .style(key_style);
-            let p_key = Paragraph::new(key.as_str()).block(key_block);
+            let p_key = Paragraph::new(key.as_str())
+                .block(key_block)
+                .style(modal_bg);
             f.render_widget(p_key, chunks[1]);
 
             let val_style = if *focus_value {
@@ -954,7 +1208,9 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 .border_type(BorderType::Rounded)
                 .title(" Secret Value ")
                 .style(val_style);
-            let p_val = Paragraph::new(value.as_str()).block(val_block);
+            let p_val = Paragraph::new(value.as_str())
+                .block(val_block)
+                .style(modal_bg);
             f.render_widget(p_val, chunks[2]);
 
             let actions = Paragraph::new(vec![Line::from(vec![
@@ -964,19 +1220,21 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::raw("Save to Vault  |  "),
                 Span::styled("[Esc] ", Style::default().fg(Color::Red).bold()),
                 Span::raw("Cancel"),
-            ])]);
+            ])])
+            .style(modal_bg);
             f.render_widget(actions, chunks[3]);
         }
 
         ModalState::ConfirmDeleteSecret(name) => {
-            let popup_area = centered_rect(50, 25, area);
+            let popup_area = centered_rect(50, 24, area);
             f.render_widget(Clear, popup_area);
 
             let block = Block::default()
                 .borders(Borders::ALL)
-                .border_type(BorderType::Double)
+                .border_type(BorderType::Rounded)
+                .style(modal_bg)
                 .title(Span::styled(
-                    " ⚠️ Delete Secret? ",
+                    " [ Confirm Delete Secret ] ",
                     Style::default().fg(Color::Red).bold(),
                 ));
 
@@ -998,20 +1256,22 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                     Span::raw("Cancel"),
                 ]),
             ])
+            .style(modal_bg)
             .alignment(Alignment::Center);
 
             f.render_widget(p, inner);
         }
 
         ModalState::ConfirmRevokeGrant(id) => {
-            let popup_area = centered_rect(50, 25, area);
+            let popup_area = centered_rect(50, 26, area);
             f.render_widget(Clear, popup_area);
 
             let block = Block::default()
                 .borders(Borders::ALL)
-                .border_type(BorderType::Double)
+                .border_type(BorderType::Rounded)
+                .style(modal_bg)
                 .title(Span::styled(
-                    " ⚠️ Revoke Permission? ",
+                    " [ Confirm Revoke Permission ] ",
                     Style::default().fg(Color::Red).bold(),
                 ));
 
@@ -1037,20 +1297,22 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                     Span::raw("Cancel"),
                 ]),
             ])
+            .style(modal_bg)
             .alignment(Alignment::Center);
 
             f.render_widget(p, inner);
         }
 
         ModalState::ConfirmResetGrants => {
-            let popup_area = centered_rect(55, 25, area);
+            let popup_area = centered_rect(55, 26, area);
             f.render_widget(Clear, popup_area);
 
             let block = Block::default()
                 .borders(Borders::ALL)
-                .border_type(BorderType::Double)
+                .border_type(BorderType::Rounded)
+                .style(modal_bg)
                 .title(Span::styled(
-                    " ⚠️ Reset All Permissions? ",
+                    " [ Confirm Reset All Permissions ] ",
                     Style::default().fg(Color::Red).bold(),
                 ));
 
@@ -1072,20 +1334,22 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                     Span::raw("Cancel"),
                 ]),
             ])
+            .style(modal_bg)
             .alignment(Alignment::Center);
 
             f.render_widget(p, inner);
         }
 
         ModalState::RevealSecret { key, value } => {
-            let popup_area = centered_rect(60, 30, area);
+            let popup_area = centered_rect(58, 28, area);
             f.render_widget(Clear, popup_area);
 
             let block = Block::default()
                 .borders(Borders::ALL)
-                .border_type(BorderType::Double)
+                .border_type(BorderType::Rounded)
+                .style(modal_bg)
                 .title(Span::styled(
-                    " 👁️ Revealed Secret Value ",
+                    " [ Revealed Secret Value ] ",
                     Style::default().fg(Color::Yellow).bold(),
                 ));
 
@@ -1095,7 +1359,7 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
             let p = Paragraph::new(vec![
                 Line::from(""),
                 Line::from(vec![
-                    Span::styled("Key Name: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Key Name:     ", Style::default().fg(Color::DarkGray)),
                     Span::styled(key, Style::default().fg(Color::Cyan).bold()),
                 ]),
                 Line::from(""),
@@ -1105,10 +1369,12 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 ]),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "Press [Esc] or [Enter] to hide",
+                    "Press [Esc] or [Enter] to close",
                     Style::default().fg(Color::DarkGray),
                 )),
             ])
+            .style(modal_bg)
+            .alignment(Alignment::Center)
             .wrap(Wrap { trim: true });
 
             f.render_widget(p, inner);
