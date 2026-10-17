@@ -1,7 +1,7 @@
 # 🛡️ MCP Sentinel
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-38%2F38%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-44%2F44%20passing-brightgreen.svg)](tests/)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 [![Security](https://img.shields.io/badge/security-Zero--Trust%20%7C%20HMAC--SHA256-orange.svg)](#security-guarantees)
 
@@ -336,10 +336,10 @@ mcp-sentinel ui
 4. **Child Process Anti-Recursion Lock**: Child processes running inside the MCP sandbox cannot access secrets or recursively invoke `mcp-sentinel`. The current executable path is also stripped from `PATH`.
 5. **UI Spoofing Defense**: The native authorization dialog collapses newlines and limits text lengths to prevent line-breaking and visual truncation attacks.
 6. **Hardware-Backed CSPRNG**: The master signing key is generated via native OS entropy (`rand::rngs::OsRng`), ensuring cryptographic unpredictability.
-7. **Verified by 38 Automated Test Suites**:
-   - **Unit Tests (16 tests)**: Vault operations, fingerprint collision resistance, HMAC signing & tamper rejection,
-     environment sanitizer whitelist, dialog text sanitization, key name validation rules.
-   - **Integration Tests (5 tests)**: Subprocess execution, CLI parsing, exit code propagation, secret list & alias commands.
+7. **Verified by 44 Automated Test Suites**:
+   - **Unit Tests (21 tests)**: Vault operations, fingerprint collision resistance, HMAC signing & tamper rejection,
+     environment sanitizer whitelist, dialog text sanitization, key name validation rules, interactive TUI input field navigation & horizontal scrolling.
+   - **Integration Tests (6 tests)**: Subprocess execution, CLI parsing, exit code propagation, secret list, permissions list, and TUI launch commands.
    - **Security Penetration Tests (7 tests)**: Host environment variable exfiltration blocked, command injection
      (`;&|`) neutralized, forged permission injection rejected, argument smuggling intercepted, child process sandbox recursion blocked, reserved key name rejection.
    - **Stress Tests (6 tests)**: 100-secret bulk injection, corrupted policy resilience, Unicode & Vietnamese character
