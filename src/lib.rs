@@ -8,5 +8,6 @@ pub mod proxy;
 pub mod redactor;
 pub mod sanitizer;
 pub mod tool_policy;
+#[cfg(feature = "tui")]
 pub mod tui;
 pub mod vault;

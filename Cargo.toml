@@ -42,10 +42,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Standard directories
 directories = "5.0"
 
-# Terminal User Interface (TUI Dashboard)
-ratatui = "0.28"
-crossterm = "0.28"
+# Terminal User Interface (TUI Dashboard) - Optional
+ratatui = { version = "0.28", optional = true }
+crossterm = { version = "0.28", optional = true }
 aho-corasick = "1.1.5"
+
+[features]
+default = ["tui"]
+tui = ["dep:ratatui", "dep:crossterm"]
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3.0", features = ["windows-native"] }

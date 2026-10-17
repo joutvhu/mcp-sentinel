@@ -5,7 +5,9 @@ use std::process::exit;
 use mcp_sentinel::cli::{
     AuditCommands, Cli, Commands, PermCommands, SecretCommands, ToolPolicyCommands,
 };
-use mcp_sentinel::{audit, dialog, policy, proxy, sanitizer, tool_policy, tui, vault};
+use mcp_sentinel::{audit, dialog, policy, proxy, sanitizer, tool_policy, vault};
+#[cfg(feature = "tui")]
+use mcp_sentinel::tui;
 
 #[tokio::main]
 async fn main() {
@@ -617,8 +619,17 @@ async fn main() {
         },
 
         Commands::Ui => {
-            if let Err(e) = tui::run_tui() {
-                eprintln!("[mcp-sentinel] TUI error: {}", e);
+            #[cfg(feature = "tui")]
+            {
+                if let Err(e) = tui::run_tui() {
+                    eprintln!("[mcp-sentinel] TUI error: {}", e);
+                    exit(1);
+                }
+            }
+            #[cfg(not(feature = "tui"))]
+            {
+                eprintln!("[mcp-sentinel] Error: TUI dashboard is not enabled in this binary build.");
+                eprintln!("Rebuild or install with default features: `cargo install --path .` (or `--features tui`)");
                 exit(1);
             }
         }
