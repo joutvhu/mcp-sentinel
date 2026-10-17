@@ -1,7 +1,7 @@
 # 🛡️ MCP Sentinel
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-59%2F59%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-65%2F65%20passing-brightgreen.svg)](tests/)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 [![Security](https://img.shields.io/badge/security-Zero--Trust%20%7C%20HMAC--SHA256-orange.svg)](#security-guarantees)
 
@@ -10,7 +10,8 @@ for [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers.
 
 It prevents API keys, database credentials, and personal access tokens from being stored in plaintext configuration
 files (`claude_desktop_config.json`, `mcp.json`), blocks malicious MCP servers from exfiltrating host environment
-variables, and enforces an interactive **Trust-On-First-Use (TOFU)** authorization model.
+variables, enforces an interactive **Trust-On-First-Use (TOFU)** authorization model, and actively masks injected
+secrets on `stdout` with **Data Loss Prevention (DLP)** streaming filters.
 
 ---
 
@@ -38,6 +39,7 @@ commands and access external tools. However, the standard deployment model intro
   |     - DB_PASSWORD / OPENAI_API_KEY                        |
   |  3. Any compromised npm/python package can exfiltrate all |
   |     host credentials back to an attacker's server!        |
+  |  4. Injected secrets echoed to stdout leak into LLM chats |
   +-----------------------------------------------------------+
 ```
 
@@ -48,7 +50,9 @@ commands and access external tools. However, the standard deployment model intro
    keys, SSH agent sockets, and personal tokens.
 3. **Zero Consent / Unrestricted Access**: Standard MCP hosts execute commands without prompting the user about what
    secrets an MCP server is requesting.
-4. **Orphan / Zombie Processes**: Crashing or improperly closed MCP hosts frequently leave child node/python background
+4. **Data Leakage via Stdout**: Even when secrets are securely injected into child processes, buggy or rogue MCP tools
+   can print tokens directly to stdout, exposing credentials inside LLM conversation logs or cloud AI model prompts.
+5. **Orphan / Zombie Processes**: Crashing or improperly closed MCP hosts frequently leave child node/python background
    processes running indefinitely, holding database connections and consuming system resources.
 
 ---
@@ -76,6 +80,7 @@ server:
   |  [4] Wipes host environment (drops AWS, SSH, GITHUB keys)      |
   |  [5] Injects ONLY explicitly authorized secrets                |
   |  [6] Attaches to OS Job Object (guarantees orphan cleanup)     |
+  |  [7] Stream DLP: Real-time secret masking on child stdout      |
   +------------------------------+---------------------------------+
                                  | (Sanitized Stdio Stream)
                                  v
@@ -85,14 +90,15 @@ server:
                   +------------------------------+
 ```
 
-| Security Feature           | Conventional MCP              | With `mcp-sentinel`                               |
-| :------------------------- | :---------------------------- | :------------------------------------------------ |
-| **Credential Storage**     | Plaintext in `.json` files    | Hardware/OS-backed Secure Keyring                 |
-| **Host Environment**       | 100% exposed to child process | Stripped clean (Default-Deny Whitelist)           |
-| **User Authorization**     | Silent automatic execution    | Native OS Pop-up Dialog (TOFU)                    |
-| **Policy Integrity**       | None (editable by any script) | HMAC-SHA256 cryptographic signature               |
-| **Orphan Process Cleanup** | Zombie processes linger       | Automatic tree termination (Job Object / Signals) |
-| **Protocol Overhead**      | Baseline                      | **Zero perceptible latency** (~26,000 msgs/sec)   |
+| Security Feature                  | Conventional MCP              | With `mcp-sentinel`                               |
+| :-------------------------------- | :---------------------------- | :------------------------------------------------ |
+| **Credential Storage**            | Plaintext in `.json` files    | Hardware/OS-backed Secure Keyring                 |
+| **Host Environment**              | 100% exposed to child process | Stripped clean (Default-Deny Whitelist)           |
+| **User Authorization**            | Silent automatic execution    | Native OS Pop-up Dialog (TOFU)                    |
+| **Policy Integrity**              | None (editable by any script) | HMAC-SHA256 cryptographic signature               |
+| **Data Loss Prevention (DLP)**    | Secrets echoed to stdout leak | Byte-level streaming masking across chunk borders |
+| **Orphan Process Cleanup**        | Zombie processes linger       | Automatic tree termination (Job Object / Signals) |
+| **Protocol Overhead**             | Baseline                      | **Zero perceptible latency** (~26,000 msgs/sec)   |
 
 ---
 
@@ -261,6 +267,7 @@ mcp-sentinel run [OPTIONS] -- <COMMAND> [ARGS]...
   - **Plain secret**: `GITHUB_TOKEN` (retrieves `GITHUB_TOKEN` from vault and injects as `GITHUB_TOKEN`).
   - **Aliased secret**: `TARGET_ENV=VAULT_KEY` (e.g., `API_KEY=OPENAI_PROD_KEY` retrieves `OPENAI_PROD_KEY` from vault and injects into child environment as `API_KEY`).
   - Allows multiple MCP servers using identical generic environment variable names (such as `API_KEY` or `DATABASE_URL`) to map cleanly to distinct secrets stored in your vault.
+- `--no-redact`: Disable automatic Data Loss Prevention (DLP) secret masking on stdout. By default, Sentinel transparently redacts any authorized secrets echoed by the child process into `[REDACTED_BY_SENTINEL]`.
 - `--name <NAME>`: Friendly display name shown in authorization prompts.
 - `-- <COMMAND>`: Command and arguments of the target MCP server.
 
@@ -359,18 +366,15 @@ mcp-sentinel ui
    proxy logs, diagnostics, and notifications exclusively to `stderr`, guaranteeing zero protocol corruption on
    `stdout`.
 4. **Child Process Anti-Recursion Lock**: Child processes running inside the MCP sandbox cannot access secrets or recursively invoke `mcp-sentinel`. The current executable path is also stripped from `PATH`.
-5. **UI Spoofing Defense**: The native authorization dialog collapses newlines and limits text lengths to prevent line-breaking and visual truncation attacks.
-6. **Hardware-Backed CSPRNG**: The master signing key is generated via native OS entropy (`rand::rngs::OsRng`), ensuring cryptographic unpredictability.
-7. **Verified by 44 Automated Test Suites**:
-   - **Unit Tests (21 tests)**: Vault operations, fingerprint collision resistance, HMAC signing & tamper rejection,
-     environment sanitizer whitelist, dialog text sanitization, key name validation rules, interactive TUI input field navigation & horizontal scrolling.
-   - **Integration Tests (6 tests)**: Subprocess execution, CLI parsing, exit code propagation, secret list, permissions list, and TUI launch commands.
-   - **Security Penetration Tests (7 tests)**: Host environment variable exfiltration blocked, command injection
-     (`;&|`) neutralized, forged permission injection rejected, argument smuggling intercepted, child process sandbox recursion blocked, reserved key name rejection.
-   - **Stress Tests (6 tests)**: 100-secret bulk injection, corrupted policy resilience, Unicode & Vietnamese character
-     preservation.
-   - **Performance Benchmarks (4 tests)**: High-load async stdio streaming (~26,000 JSON-RPC msgs/sec), multithreaded
-     SHA-256 hashing (~320,000 ops/sec).
+5. **Real-Time Data Loss Prevention (DLP)**: Stream redactor powered by `aho-corasick` scans the child's `stdout` pipeline on the fly. Any injected secret value (≥ 5 characters) echoed back by rogue tools, error logs, or LLM output is masked with `[REDACTED_BY_SENTINEL]` before reaching the host IDE, cleanly handling split secrets across 8KB streaming chunk boundaries.
+6. **UI Spoofing Defense**: The native authorization dialog collapses newlines and limits text lengths to prevent line-breaking and visual truncation attacks.
+7. **Hardware-Backed CSPRNG**: The master signing key is generated via native OS entropy (`rand::rngs::OsRng`), ensuring cryptographic unpredictability.
+8. **Verified by 65 Automated Tests across 5 Suites**:
+   - **Unit Tests (34 tests)**: Vault operations, alias mapping & validation, fingerprint collision resistance, HMAC signing & tamper rejection, environment sanitizer whitelist, dialog text sanitization, interactive TUI input field navigation, and stream-boundary DLP redaction.
+   - **Integration Tests (8 tests)**: Subprocess execution, CLI parsing, exit code propagation, secret list, permissions list, TUI launch commands, and full migration workflow.
+   - **Security Penetration Tests (13 tests)**: Host environment variable exfiltration blocked, command injection (`;&|`) neutralized, forged permission injection rejected, argument smuggling intercepted, child process sandbox recursion blocked, reserved key name rejection, alias tamper resistance, and stdout DLP secret masking.
+   - **Stress Tests (6 tests)**: 100-secret bulk injection, corrupted policy resilience, Unicode & Vietnamese character preservation, stdio separation.
+   - **Performance Benchmarks (4 tests)**: High-load async stdio streaming (~26,000 JSON-RPC msgs/sec), multithreaded SHA-256 hashing (~320,000 ops/sec).
 
 ---
 

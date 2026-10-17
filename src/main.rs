@@ -28,7 +28,12 @@ async fn main() {
     }
 
     match cli.command {
-        Commands::Run { secrets, name, cmd } => {
+        Commands::Run {
+            secrets,
+            name,
+            no_redact,
+            cmd,
+        } => {
             if cmd.is_empty() {
                 eprintln!("[mcp-sentinel] Error: No command specified to run.");
                 exit(1);
@@ -95,8 +100,15 @@ async fn main() {
             // 3. Prepare clean environment
             let clean_env = sanitizer::build_sanitized_env(&secrets_map);
 
-            // 4. Run proxy supervisor
-            match proxy::run_child_and_pipe(&cmd, clean_env).await {
+            // 4. Determine secrets to redact on stdout (DLP filter)
+            let redact_secrets: Vec<String> = if no_redact {
+                Vec::new()
+            } else {
+                secrets_map.values().cloned().collect()
+            };
+
+            // 5. Run proxy supervisor
+            match proxy::run_child_and_pipe(&cmd, clean_env, redact_secrets).await {
                 Ok(code) => exit(code),
                 Err(e) => {
                     eprintln!("[mcp-sentinel] Execution error: {}", e);

@@ -4,6 +4,7 @@ pub mod migrate;
 pub mod platform;
 pub mod policy;
 pub mod proxy;
+pub mod redactor;
 pub mod sanitizer;
 pub mod tui;
 pub mod vault;

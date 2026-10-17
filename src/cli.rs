@@ -25,6 +25,10 @@ pub enum Commands {
         #[arg(short, long)]
         name: Option<String>,
 
+        /// Disable automatic Data Loss Prevention (DLP) secret masking on stdout
+        #[arg(long)]
+        no_redact: bool,
+
         /// Command and arguments to execute (after --)
         #[arg(last = true, required = true)]
         cmd: Vec<String>,
@@ -123,10 +127,35 @@ mod tests {
         ];
         let cli = Cli::try_parse_from(args).expect("CLI should parse run command successfully");
         match cli.command {
-            Commands::Run { secrets, name, cmd } => {
+            Commands::Run {
+                secrets,
+                name,
+                cmd,
+                no_redact,
+            } => {
                 assert_eq!(secrets, vec!["KEY_A".to_string(), "KEY_B".to_string()]);
                 assert_eq!(name, Some("My Server".to_string()));
                 assert_eq!(cmd, vec!["node".to_string(), "server.js".to_string()]);
+                assert!(!no_redact);
+            }
+            _ => panic!("Expected Commands::Run"),
+        }
+    }
+
+    #[test]
+    fn test_parse_run_command_no_redact() {
+        let args = vec![
+            "mcp-sentinel",
+            "run",
+            "--no-redact",
+            "--",
+            "node",
+            "server.js",
+        ];
+        let cli = Cli::try_parse_from(args).expect("CLI should parse run command successfully");
+        match cli.command {
+            Commands::Run { no_redact, .. } => {
+                assert!(no_redact);
             }
             _ => panic!("Expected Commands::Run"),
         }

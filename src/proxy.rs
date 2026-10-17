@@ -5,6 +5,7 @@ use tokio::process::Command;
 pub async fn run_child_and_pipe(
     cmd_args: &[String],
     env_vars: HashMap<String, String>,
+    redact_secrets: Vec<String>,
 ) -> Result<i32, Box<dyn std::error::Error>> {
     if cmd_args.is_empty() {
         return Err("No command specified to execute".into());
@@ -60,7 +61,14 @@ pub async fn run_child_and_pipe(
     });
 
     let out_task = tokio::spawn(async move {
-        let _ = tokio::io::copy(&mut child_stdout, &mut host_stdout).await;
+        if redact_secrets.is_empty() {
+            let _ = tokio::io::copy(&mut child_stdout, &mut host_stdout).await;
+        } else {
+            let mut redactor = crate::redactor::StreamRedactor::new(&redact_secrets);
+            let _ = redactor
+                .pipe_and_redact(&mut child_stdout, &mut host_stdout)
+                .await;
+        }
     });
 
     let err_task = tokio::spawn(async move {

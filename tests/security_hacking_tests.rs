@@ -262,7 +262,16 @@ fn hack_test_secret_aliasing_end_to_end() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
         .env("MCP_SENTINEL_NON_INTERACTIVE", "1")
-        .args(["run", "--secrets", &alias_spec, "--", "node", "-e", script])
+        .args([
+            "run",
+            "--no-redact",
+            "--secrets",
+            &alias_spec,
+            "--",
+            "node",
+            "-e",
+            script,
+        ])
         .output()
         .expect("Failed to execute mcp-sentinel with alias");
 
@@ -381,7 +390,16 @@ fn hack_test_secret_value_with_equals_and_special_chars() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
         .env("MCP_SENTINEL_NON_INTERACTIVE", "1")
-        .args(["run", "--secrets", &alias_spec, "--", "node", "-e", script])
+        .args([
+            "run",
+            "--no-redact",
+            "--secrets",
+            &alias_spec,
+            "--",
+            "node",
+            "-e",
+            script,
+        ])
         .output()
         .expect("Failed to execute mcp-sentinel");
 
@@ -420,7 +438,16 @@ fn hack_test_multiple_aliases_pointing_to_same_vault_key() {
     let spec_arg = format!("{},{}", spec1, spec2);
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
         .env("MCP_SENTINEL_NON_INTERACTIVE", "1")
-        .args(["run", "--secrets", &spec_arg, "--", "node", "-e", script])
+        .args([
+            "run",
+            "--no-redact",
+            "--secrets",
+            &spec_arg,
+            "--",
+            "node",
+            "-e",
+            script,
+        ])
         .output()
         .expect("Failed to execute mcp-sentinel");
 
@@ -433,4 +460,70 @@ fn hack_test_multiple_aliases_pointing_to_same_vault_key() {
         "Both environment variables must receive the shared vault secret! Actual: {}",
         stdout
     );
+}
+
+/// HACK ATTACK 13: Data Loss Prevention (DLP) & Secret Masking on Stdout
+/// A rogue MCP server or LLM response echoes an injected secret back to stdout.
+/// By default, mcp-sentinel must mask the secret with [REDACTED_BY_SENTINEL].
+/// When --no-redact is supplied, raw pass-through is honored.
+#[test]
+fn hack_test_dlp_secret_masking_on_stdout() {
+    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let vault_key = "TEST_VAULT_DLP_SECRET_KEY";
+    let raw_secret = "ghp_super_confidential_production_token_999";
+
+    let _ = mcp_sentinel::vault::set_secret(vault_key, raw_secret);
+
+    let script = "console.log('OUTPUT_MSG_BEGIN:' + process.env.GITHUB_TOKEN + ':OUTPUT_MSG_END');";
+    let cmd = vec!["node".to_string(), "-e".to_string(), script.to_string()];
+    let fp = compute_fingerprint(&cmd);
+    let spec = format!("GITHUB_TOKEN={}", vault_key);
+
+    mcp_sentinel::policy::record_grant(&fp, None, &cmd, std::slice::from_ref(&spec))
+        .expect("Pre-authorizing grant must succeed");
+
+    // 1. Test Default Behavior: DLP Masking active
+    let default_output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_NON_INTERACTIVE", "1")
+        .args(["run", "--secrets", &spec, "--", "node", "-e", script])
+        .output()
+        .expect("Failed to execute mcp-sentinel with default DLP");
+
+    assert!(default_output.status.success());
+    let default_stdout = String::from_utf8_lossy(&default_output.stdout);
+    assert!(
+        default_stdout.contains("OUTPUT_MSG_BEGIN:[REDACTED_BY_SENTINEL]:OUTPUT_MSG_END"),
+        "Secret printed to stdout must be masked with [REDACTED_BY_SENTINEL] by default! Actual: {}",
+        default_stdout
+    );
+    assert!(
+        !default_stdout.contains(raw_secret),
+        "Raw secret must never leak into stdout!"
+    );
+
+    // 2. Test Opt-out Behavior: --no-redact passed
+    let no_redact_output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_NON_INTERACTIVE", "1")
+        .args([
+            "run",
+            "--no-redact",
+            "--secrets",
+            &spec,
+            "--",
+            "node",
+            "-e",
+            script,
+        ])
+        .output()
+        .expect("Failed to execute mcp-sentinel with --no-redact");
+
+    assert!(no_redact_output.status.success());
+    let no_redact_stdout = String::from_utf8_lossy(&no_redact_output.stdout);
+    assert!(
+        no_redact_stdout.contains(raw_secret),
+        "Raw secret should pass through when --no-redact is specified! Actual: {}",
+        no_redact_stdout
+    );
+
+    let _ = mcp_sentinel::vault::delete_secret(vault_key);
 }
