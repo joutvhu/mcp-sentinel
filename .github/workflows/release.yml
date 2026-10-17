@@ -84,6 +84,7 @@ jobs:
     name: Publish to Crates.io
     needs: build-release
     runs-on: ubuntu-latest
+    continue-on-error: true
     env:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
     steps:
