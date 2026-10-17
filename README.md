@@ -67,7 +67,7 @@ server:
              | (Stdio JSON-RPC)
              v
   +----------------------------------------------------------------+
-  |                         mcp-sentinel                             |
+  |                         mcp-sentinel                           |
   |                                                                |
   |  [1] Resolves secrets directly from Native OS Keyring          |
   |      (Windows Credential Manager / Apple Keychain / SecretSvc) |
@@ -294,6 +294,24 @@ mcp-sentinel permissions revoke <FINGERPRINT_HEX>
 # Reset and purge all stored permissions
 mcp-sentinel permissions reset
 ```
+
+### `mcp-sentinel ui` (alias: `tui`, `dashboard`)
+
+Launch the interactive Terminal User Interface (TUI) Dashboard for visual secret and permission management.
+
+```bash
+mcp-sentinel ui
+```
+
+* **Keyboard Shortcuts:**
+  * `[Tab]` / `[Shift+Tab]`: Switch tabs (`[1] 🔐 Secrets Vault`, `[2] 🛡️ Active Permissions`, `[3] ℹ️ System Status`)
+  * `[↑]` / `[↓]`: Select secret or granted permission
+  * `[v]`: Reveal secret value in modal dialog
+  * `[a]`: Add new secret directly to OS Keyring
+  * `[d]`: Delete secret or revoke permission
+  * `[x]`: Reset all permissions
+  * `[r]`: Reload from OS Vault
+  * `[q]` / `[Esc]`: Quit dashboard
 
 ---
 

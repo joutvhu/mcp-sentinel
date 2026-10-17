@@ -4,4 +4,5 @@ pub mod platform;
 pub mod policy;
 pub mod proxy;
 pub mod sanitizer;
+pub mod tui;
 pub mod vault;

@@ -13,6 +13,26 @@ fn test_cli_help_flag() {
     assert!(stdout.contains("run"));
     assert!(stdout.contains("secrets"));
     assert!(stdout.contains("permissions"));
+    assert!(stdout.contains("ui"));
+}
+
+#[test]
+fn test_cli_ui_help() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args(["ui", "--help"])
+        .output()
+        .expect("Failed to execute mcp-sentinel ui --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Terminal User Interface"));
+
+    // Also test alias "tui"
+    let output_tui = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args(["tui", "--help"])
+        .output()
+        .expect("Failed to execute mcp-sentinel tui --help");
+    assert!(output_tui.status.success());
 }
 
 #[test]

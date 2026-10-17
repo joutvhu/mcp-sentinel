@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::process::exit;
 
 use mcp_sentinel::cli::{Cli, Commands, PermCommands, SecretCommands};
-use mcp_sentinel::{dialog, policy, proxy, sanitizer, vault};
+use mcp_sentinel::{dialog, policy, proxy, sanitizer, tui, vault};
 
 #[tokio::main]
 async fn main() {
@@ -188,5 +188,12 @@ async fn main() {
                 }
             },
         },
+
+        Commands::Ui => {
+            if let Err(e) = tui::run_tui() {
+                eprintln!("[mcp-sentinel] TUI error: {}", e);
+                exit(1);
+            }
+        }
     }
 }

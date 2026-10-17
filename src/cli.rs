@@ -43,6 +43,10 @@ pub enum Commands {
         #[command(subcommand)]
         action: PermCommands,
     },
+
+    /// Launch the interactive Terminal User Interface (TUI) Dashboard
+    #[command(alias = "tui", alias = "dashboard")]
+    Ui,
 }
 
 #[derive(Subcommand, Debug)]
@@ -193,5 +197,15 @@ mod tests {
         // "secret" singular alias for Secrets
         let cli_sec = Cli::try_parse_from(["mcp-sentinel", "secret", "list"]).unwrap();
         assert!(matches!(cli_sec.command, Commands::Secrets { .. }));
+
+        // "ui", "tui", "dashboard"
+        let cli_ui = Cli::try_parse_from(["mcp-sentinel", "ui"]).unwrap();
+        assert!(matches!(cli_ui.command, Commands::Ui));
+
+        let cli_tui = Cli::try_parse_from(["mcp-sentinel", "tui"]).unwrap();
+        assert!(matches!(cli_tui.command, Commands::Ui));
+
+        let cli_dash = Cli::try_parse_from(["mcp-sentinel", "dashboard"]).unwrap();
+        assert!(matches!(cli_dash.command, Commands::Ui));
     }
 }
