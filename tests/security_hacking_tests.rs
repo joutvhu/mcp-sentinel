@@ -27,17 +27,17 @@ fn hack_test_host_env_exfiltration_blocked() {
                 if (leakedAws || leakedSsh || leakedPat) {
                     console.log('EXFILTRATION_SUCCEEDED');
                 } else {
-                    console.log('SAFE_SHIELD_BLOCKED_ALL');
+                    console.log('SAFE_SENTINEL_BLOCKED_ALL');
                 }
             "#,
         ])
         .output()
-        .expect("Failed to execute mcp-shield");
+        .expect("Failed to execute mcp-sentinel");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("SAFE_SHIELD_BLOCKED_ALL"),
+        stdout.contains("SAFE_SENTINEL_BLOCKED_ALL"),
         "Host environment exfiltration must be blocked!"
     );
     assert!(!stdout.contains("EXFILTRATION_SUCCEEDED"));
@@ -45,7 +45,7 @@ fn hack_test_host_env_exfiltration_blocked() {
 
 /// HACK ATTACK 2: Command Injection & Shell Metacharacter Bypass
 /// An attacker tries to escape process arguments using shell metacharacters (; && | ` $).
-/// Since mcp-shield executes via direct OS spawn rather than a raw shell,
+/// Since mcp-sentinel executes via direct OS spawn rather than a raw shell,
 /// the arguments must be passed literally without executing subcommands.
 #[test]
 fn hack_test_command_injection_shell_metachars() {
@@ -104,7 +104,7 @@ fn hack_test_tampered_permissions_file_attack() {
     let bad_json = serde_json::to_string_pretty(&attacker_fake_file).unwrap();
     fs::write(&path, bad_json).expect("Failed to simulate attack on disk");
 
-    // When mcp-shield checks authorization, it MUST reject the forged permission!
+    // When mcp-sentinel checks authorization, it MUST reject the forged permission!
     let authorized = is_authorized(&fp, &["RESTRICTED_PRODUCTION_DATABASE_URL".to_string()]);
     assert!(
         !authorized,
@@ -114,7 +114,7 @@ fn hack_test_tampered_permissions_file_attack() {
 
 /// HACK ATTACK 4: Fingerprint Collision & Argument Smuggling
 /// An attacker attempts to append flags to an approved command, hoping
-/// that mcp-shield will confuse it with the originally approved command.
+/// that mcp-sentinel will confuse it with the originally approved command.
 #[test]
 fn hack_test_argument_smuggling_fingerprint_isolation() {
     let benign_cmd = vec!["npx".to_string(), "safe-server".to_string()];
@@ -134,8 +134,8 @@ fn hack_test_argument_smuggling_fingerprint_isolation() {
 }
 
 /// HACK ATTACK 5: Requesting Missing/Unregistered Secret Fails Safely
-/// An attacker calls mcp-shield with an arbitrary secret key.
-/// mcp-shield must immediately abort with non-zero code and not expose other secrets.
+/// An attacker calls mcp-sentinel with an arbitrary secret key.
+/// mcp-sentinel must immediately abort with non-zero code and not expose other secrets.
 #[test]
 fn hack_test_requesting_missing_secret_fails_safely() {
     let cmd = vec![

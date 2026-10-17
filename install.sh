@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MCP-Shield macOS & Linux Quick Installer
+# MCP-Sentinel macOS & Linux Quick Installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/joutvhu/mcp-sentinel/main/install.sh | sh
 
 set -e

@@ -62,6 +62,8 @@ pub enum SecretCommands {
         /// Secret key name
         key: String,
     },
+    /// List all stored secret keys
+    List,
 }
 
 #[derive(Subcommand, Debug)]
@@ -84,7 +86,7 @@ mod tests {
     #[test]
     fn test_parse_run_command() {
         let args = vec![
-            "mcp-shield",
+            "mcp-sentinel",
             "run",
             "--secrets",
             "KEY_A,KEY_B",
@@ -108,7 +110,7 @@ mod tests {
     #[test]
     fn test_parse_secret_commands() {
         // Set
-        let cli = Cli::try_parse_from(["mcp-shield", "secret", "set", "MY_KEY", "MY_VAL"]).unwrap();
+        let cli = Cli::try_parse_from(["mcp-sentinel", "secret", "set", "MY_KEY", "MY_VAL"]).unwrap();
         match cli.command {
             Commands::Secret {
                 action: SecretCommands::Set { key, value },
@@ -120,7 +122,7 @@ mod tests {
         }
 
         // Get
-        let cli = Cli::try_parse_from(["mcp-shield", "secret", "get", "MY_KEY"]).unwrap();
+        let cli = Cli::try_parse_from(["mcp-sentinel", "secret", "get", "MY_KEY"]).unwrap();
         match cli.command {
             Commands::Secret {
                 action: SecretCommands::Get { key },
@@ -131,7 +133,7 @@ mod tests {
         }
 
         // Delete
-        let cli = Cli::try_parse_from(["mcp-shield", "secret", "delete", "MY_KEY"]).unwrap();
+        let cli = Cli::try_parse_from(["mcp-sentinel", "secret", "delete", "MY_KEY"]).unwrap();
         match cli.command {
             Commands::Secret {
                 action: SecretCommands::Delete { key },
@@ -145,7 +147,7 @@ mod tests {
     #[test]
     fn test_parse_permission_commands() {
         // List
-        let cli = Cli::try_parse_from(["mcp-shield", "permissions", "list"]).unwrap();
+        let cli = Cli::try_parse_from(["mcp-sentinel", "permissions", "list"]).unwrap();
         assert!(matches!(
             cli.command,
             Commands::Permissions {
@@ -154,7 +156,7 @@ mod tests {
         ));
 
         // Revoke
-        let cli = Cli::try_parse_from(["mcp-shield", "permissions", "revoke", "fp_12345"]).unwrap();
+        let cli = Cli::try_parse_from(["mcp-sentinel", "permissions", "revoke", "fp_12345"]).unwrap();
         match cli.command {
             Commands::Permissions {
                 action: PermCommands::Revoke { id },
@@ -165,7 +167,7 @@ mod tests {
         }
 
         // Reset
-        let cli = Cli::try_parse_from(["mcp-shield", "permissions", "reset"]).unwrap();
+        let cli = Cli::try_parse_from(["mcp-sentinel", "permissions", "reset"]).unwrap();
         assert!(matches!(
             cli.command,
             Commands::Permissions {

@@ -1,4 +1,4 @@
-# MCP-Shield Windows Quick Installer
+# MCP-Sentinel Windows Quick Installer
 # Usage: irm https://raw.githubusercontent.com/joutvhu/mcp-sentinel/main/install.ps1 | iex
 
 $ErrorActionPreference = 'Stop'

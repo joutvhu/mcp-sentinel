@@ -5,7 +5,7 @@ fn test_cli_help_flag() {
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
         .arg("--help")
         .output()
-        .expect("Failed to execute mcp-shield --help");
+        .expect("Failed to execute mcp-sentinel --help");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -32,7 +32,7 @@ fn test_cli_run_without_command_fails() {
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
         .arg("run")
         .output()
-        .expect("Failed to execute mcp-shield run");
+        .expect("Failed to execute mcp-sentinel run");
 
     // Must fail because <CMD> is required
     assert!(!output.status.success());
@@ -43,7 +43,17 @@ fn test_cli_permissions_list() {
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
         .args(["permissions", "list"])
         .output()
-        .expect("Failed to execute mcp-shield permissions list");
+        .expect("Failed to execute mcp-sentinel permissions list");
+
+    assert!(output.status.success());
+}
+
+#[test]
+fn test_cli_secret_list() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args(["secret", "list"])
+        .output()
+        .expect("Failed to execute mcp-sentinel secret list");
 
     assert!(output.status.success());
 }

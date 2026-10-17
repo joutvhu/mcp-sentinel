@@ -106,6 +106,17 @@ async fn main() {
                     exit(1);
                 }
             },
+            SecretCommands::List => {
+                let keys = vault::list_keys();
+                if keys.is_empty() {
+                    println!("No secrets stored in OS Keyring.");
+                } else {
+                    println!("Stored secret keys in OS Keyring ({}):", keys.len());
+                    for key in keys {
+                        println!("  - {}", key);
+                    }
+                }
+            }
         },
 
         Commands::Permissions { action } => match action {

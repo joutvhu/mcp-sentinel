@@ -121,7 +121,7 @@ fn bench_concurrent_fingerprint_multithreading() {
 
 #[test]
 fn bench_stdio_stream_high_throughput() {
-    // Test piping 5,000 JSON lines through mcp-shield to verify streaming throughput
+    // Test piping 5,000 JSON lines through mcp-sentinel to verify streaming throughput
     let script = r#"
         const readline = require('readline');
         const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: false });

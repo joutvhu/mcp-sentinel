@@ -8,7 +8,7 @@ fn test_exit_code_propagation_success() {
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
         .args(["run", "--", "node", "-e", "process.exit(0)"])
         .output()
-        .expect("Failed to execute mcp-shield");
+        .expect("Failed to execute mcp-sentinel");
 
     assert_eq!(output.status.code(), Some(0));
 }
@@ -18,7 +18,7 @@ fn test_exit_code_propagation_custom_error() {
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
         .args(["run", "--", "node", "-e", "process.exit(42)"])
         .output()
-        .expect("Failed to execute mcp-shield");
+        .expect("Failed to execute mcp-sentinel");
 
     assert_eq!(output.status.code(), Some(42));
 }
@@ -29,7 +29,7 @@ fn test_stdout_and_stderr_separation() {
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
         .args(["run", "--", "node", "-e", script])
         .output()
-        .expect("Failed to execute mcp-shield");
+        .expect("Failed to execute mcp-sentinel");
 
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);

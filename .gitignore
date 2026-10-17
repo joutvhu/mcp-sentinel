@@ -1,4 +1,6 @@
 /target
 .idea/
+.kiro/
+.agents/
 .DS_Store
 *.swp
