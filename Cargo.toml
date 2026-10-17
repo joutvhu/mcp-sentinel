@@ -1,6 +1,6 @@
 [package]
 name = "mcp-sentinel"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 authors = ["Giáo Hồ"]
 description = "Zero-Trust Secret Vault & Security Proxy for Model Context Protocol (MCP)"

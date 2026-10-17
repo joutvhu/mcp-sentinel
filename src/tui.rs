@@ -232,6 +232,13 @@ pub enum ModalState {
         key: String,
         value: String,
     },
+    ViewGrant {
+        id: String,
+        name: Option<String>,
+        command: String,
+        secrets: Vec<String>,
+        created_at: String,
+    },
     UpdateSecret {
         key: String,
         value: InputField,
@@ -252,6 +259,8 @@ pub struct App {
     pub modal: ModalState,
     pub status_message: Option<(String, Color)>,
     pub should_quit: bool,
+    pub detail_scroll: u16,
+    pub modal_scroll: u16,
 }
 
 impl App {
@@ -273,6 +282,8 @@ impl App {
                 Color::Cyan,
             )),
             should_quit: false,
+            detail_scroll: 0,
+            modal_scroll: 0,
         };
         app.reload_secrets();
         app.reload_permissions();
@@ -382,6 +393,7 @@ impl App {
                         _ => self.secrets.len() - 1,
                     };
                     self.secrets_state.select(Some(prev));
+                    self.detail_scroll = 0;
                 }
             }
             AppTab::Permissions => {
@@ -391,6 +403,7 @@ impl App {
                         _ => self.grants_list.len() - 1,
                     };
                     self.permissions_state.select(Some(prev));
+                    self.detail_scroll = 0;
                 }
             }
             AppTab::ToolProfiles => {
@@ -400,9 +413,12 @@ impl App {
                         _ => self.tool_profiles.len() - 1,
                     };
                     self.tool_profiles_state.select(Some(prev));
+                    self.detail_scroll = 0;
                 }
             }
-            AppTab::System => {}
+            AppTab::System => {
+                self.detail_scroll = self.detail_scroll.saturating_sub(1);
+            }
         }
     }
 
@@ -415,6 +431,7 @@ impl App {
                         _ => 0,
                     };
                     self.secrets_state.select(Some(next));
+                    self.detail_scroll = 0;
                 }
             }
             AppTab::Permissions => {
@@ -424,6 +441,7 @@ impl App {
                         _ => 0,
                     };
                     self.permissions_state.select(Some(next));
+                    self.detail_scroll = 0;
                 }
             }
             AppTab::ToolProfiles => {
@@ -433,9 +451,12 @@ impl App {
                         _ => 0,
                     };
                     self.tool_profiles_state.select(Some(next));
+                    self.detail_scroll = 0;
                 }
             }
-            AppTab::System => {}
+            AppTab::System => {
+                self.detail_scroll = self.detail_scroll.saturating_add(1);
+            }
         }
     }
 
@@ -444,6 +465,7 @@ impl App {
             if let Some(key_name) = self.secrets.get(i) {
                 match vault::get_secret(key_name) {
                     Ok(val) => {
+                        self.modal_scroll = 0;
                         self.modal = ModalState::RevealSecret {
                             key: key_name.clone(),
                             value: val,
@@ -507,6 +529,29 @@ impl App {
                 for full_id in self.policy.grants.keys() {
                     if full_id.starts_with(id) {
                         self.modal = ModalState::ConfirmRevokeGrant(full_id.clone());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn open_view_grant_modal(&mut self) {
+        if let Some(i) = self.permissions_state.selected() {
+            if let Some((id, _, _, _)) = self.grants_list.get(i) {
+                for (full_id, grant) in &self.policy.grants {
+                    if full_id.starts_with(id) {
+                        self.modal_scroll = 0;
+                        self.modal = ModalState::ViewGrant {
+                            id: full_id.clone(),
+                            name: grant.name.clone(),
+                            command: grant.command.clone(),
+                            secrets: grant.granted_secrets.clone(),
+                            created_at: grant
+                                .created_at
+                                .format("%Y-%m-%d %H:%M:%S UTC")
+                                .to_string(),
+                        };
                         break;
                     }
                 }
@@ -781,8 +826,43 @@ fn main_loop<B: ratatui::backend::Backend>(
                     },
 
                     ModalState::RevealSecret { .. } => match key.code {
-                        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('v') => {
+                        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('v') | KeyCode::Char('q') => {
                             app.modal = ModalState::None;
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            app.modal_scroll = app.modal_scroll.saturating_sub(1);
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            app.modal_scroll = app.modal_scroll.saturating_add(1);
+                        }
+                        KeyCode::PageUp => {
+                            app.modal_scroll = app.modal_scroll.saturating_sub(4);
+                        }
+                        KeyCode::PageDown => {
+                            app.modal_scroll = app.modal_scroll.saturating_add(4);
+                        }
+                        _ => {}
+                    },
+
+                    ModalState::ViewGrant { id, .. } => match key.code {
+                        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                            app.modal = ModalState::None;
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            app.modal_scroll = app.modal_scroll.saturating_sub(1);
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            app.modal_scroll = app.modal_scroll.saturating_add(1);
+                        }
+                        KeyCode::PageUp => {
+                            app.modal_scroll = app.modal_scroll.saturating_sub(4);
+                        }
+                        KeyCode::PageDown => {
+                            app.modal_scroll = app.modal_scroll.saturating_add(4);
+                        }
+                        KeyCode::Char('d') | KeyCode::Delete => {
+                            let full_id = id.clone();
+                            app.modal = ModalState::ConfirmRevokeGrant(full_id);
                         }
                         _ => {}
                     },
@@ -846,24 +926,28 @@ fn main_loop<B: ratatui::backend::Backend>(
                                 app.current_tab = AppTab::Secrets;
                                 app.sidebar_index = 0;
                                 app.focus = FocusArea::Content;
+                                app.detail_scroll = 0;
                                 continue;
                             }
                             KeyCode::Char('2') => {
                                 app.current_tab = AppTab::Permissions;
                                 app.sidebar_index = 1;
                                 app.focus = FocusArea::Content;
+                                app.detail_scroll = 0;
                                 continue;
                             }
                             KeyCode::Char('3') => {
                                 app.current_tab = AppTab::ToolProfiles;
                                 app.sidebar_index = 2;
                                 app.focus = FocusArea::Content;
+                                app.detail_scroll = 0;
                                 continue;
                             }
                             KeyCode::Char('4') => {
                                 app.current_tab = AppTab::System;
                                 app.sidebar_index = 3;
                                 app.focus = FocusArea::Content;
+                                app.detail_scroll = 0;
                                 continue;
                             }
                             KeyCode::Char('a') => {
@@ -892,9 +976,11 @@ fn main_loop<B: ratatui::backend::Backend>(
                             FocusArea::Sidebar => match key.code {
                                 KeyCode::Up | KeyCode::Char('k') => {
                                     app.sidebar_up();
+                                    app.detail_scroll = 0;
                                 }
                                 KeyCode::Down | KeyCode::Char('j') => {
                                     app.sidebar_down();
+                                    app.detail_scroll = 0;
                                 }
                                 KeyCode::Enter => {
                                     if let Some((action, _, _)) =
@@ -904,6 +990,7 @@ fn main_loop<B: ratatui::backend::Backend>(
                                             SidebarAction::Tab(tab) => {
                                                 app.current_tab = *tab;
                                                 app.focus = FocusArea::Content;
+                                                app.detail_scroll = 0;
                                             }
                                             SidebarAction::AddSecret => {
                                                 app.open_add_modal();
@@ -946,18 +1033,26 @@ fn main_loop<B: ratatui::backend::Backend>(
                                 KeyCode::Down | KeyCode::Char('j') => {
                                     app.content_down();
                                 }
+                                KeyCode::PageUp => {
+                                    app.detail_scroll = app.detail_scroll.saturating_sub(4);
+                                }
+                                KeyCode::PageDown => {
+                                    app.detail_scroll = app.detail_scroll.saturating_add(4);
+                                }
                                 KeyCode::Tab => {
                                     app.focus = FocusArea::Sidebar;
                                 }
                                 KeyCode::Enter => match app.current_tab {
                                     AppTab::Secrets => app.open_reveal_modal(),
-                                    AppTab::Permissions => app.open_revoke_modal(),
+                                    AppTab::Permissions => app.open_view_grant_modal(),
                                     AppTab::ToolProfiles => {}
                                     AppTab::System => {}
                                 },
-                                KeyCode::Char('v') if app.current_tab == AppTab::Secrets => {
-                                    app.open_reveal_modal();
-                                }
+                                KeyCode::Char('v') => match app.current_tab {
+                                    AppTab::Secrets => app.open_reveal_modal(),
+                                    AppTab::Permissions => app.open_view_grant_modal(),
+                                    _ => {}
+                                },
                                 KeyCode::Char('e') if app.current_tab == AppTab::Secrets => {
                                     app.open_update_modal();
                                 }
@@ -980,24 +1075,37 @@ fn main_loop<B: ratatui::backend::Backend>(
 fn ui(f: &mut Frame, app: &mut App) {
     let size = f.area();
 
+    // Responsive header & footer height
+    let header_height = if size.height < 20 { 1 } else { 3 };
+    let footer_height = if size.height < 16 { 1 } else { 2 };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Header Banner
-            Constraint::Min(10),   // Sidebar + Content
-            Constraint::Length(2), // Footer Keybinds & Status
+            Constraint::Length(header_height), // Header Banner
+            Constraint::Min(6),                // Sidebar + Content
+            Constraint::Length(footer_height), // Footer Keybinds & Status
         ])
         .split(size);
 
-    // 1. Top Header Banner
+    // Responsive sidebar width based on available terminal columns
+    let sidebar_width = if size.width < 70 {
+        18
+    } else if size.width < 90 {
+        22
+    } else {
+        28
+    };
+
+    // 1. Header
     render_header(f, chunks[0]);
 
     // 2. Middle Body: Left Sidebar + Right Content View
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(28), // Sidebar fixed width
-            Constraint::Min(40),    // Main content
+            Constraint::Length(sidebar_width), // Adaptive sidebar width
+            Constraint::Min(24),               // Main content
         ])
         .split(chunks[1]);
 
@@ -1018,6 +1126,36 @@ fn ui(f: &mut Frame, app: &mut App) {
 }
 
 fn render_header(f: &mut Frame, area: Rect) {
+    if area.height == 0 {
+        return;
+    }
+
+    if area.height == 1 {
+        // Compact single-line header for short terminal screens
+        let compact_text = Line::from(vec![
+            Span::styled(
+                " MCP SENTINEL ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .bold()
+                    .bg(Color::Rgb(20, 30, 45)),
+            ),
+            Span::raw(" | "),
+            Span::styled(
+                concat!("v", env!("CARGO_PKG_VERSION")),
+                Style::default().fg(Color::Yellow).bold(),
+            ),
+            Span::raw(" | "),
+            Span::styled(
+                "Zero-Trust Secret Vault & Proxy",
+                Style::default().fg(Color::White),
+            ),
+        ]);
+        let header_p = Paragraph::new(compact_text).alignment(Alignment::Center);
+        f.render_widget(header_p, area);
+        return;
+    }
+
     let header_text = vec![Line::from(vec![
         Span::styled(
             " MCP SENTINEL ",
@@ -1066,7 +1204,7 @@ fn render_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         Style::default().fg(Color::White)
     };
 
-    let inner_width = (area.width.saturating_sub(2) as usize).max(20);
+    let inner_width = (area.width.saturating_sub(2) as usize).max(10);
     let mut items = Vec::new();
 
     for (i, (action, label, shortcut)) in SIDEBAR_MENU.iter().enumerate() {
@@ -1087,26 +1225,35 @@ fn render_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             }
         };
 
-        let fixed_len = 2 + label.len() + shortcut.len();
-        let pad_len = if inner_width > fixed_len {
-            inner_width - fixed_len
-        } else {
-            1
-        };
-        let padding = " ".repeat(pad_len);
-
         let shortcut_style = if is_selected {
             Style::default().fg(Color::Cyan).bold()
         } else {
             Style::default().fg(Color::DarkGray)
         };
 
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled(prefix, style),
-            Span::styled(*label, style),
-            Span::raw(padding),
-            Span::styled(*shortcut, shortcut_style),
-        ])));
+        let item_line = if area.width < 22 {
+            // Compact sidebar without extra shortcut padding for narrow terminals
+            Line::from(vec![
+                Span::styled(prefix, style),
+                Span::styled(*label, style),
+            ])
+        } else {
+            let fixed_len = 2 + label.len() + shortcut.len();
+            let pad_len = if inner_width > fixed_len {
+                inner_width - fixed_len
+            } else {
+                1
+            };
+            let padding = " ".repeat(pad_len);
+            Line::from(vec![
+                Span::styled(prefix, style),
+                Span::styled(*label, style),
+                Span::raw(padding),
+                Span::styled(*shortcut, shortcut_style),
+            ])
+        };
+
+        items.push(ListItem::new(item_line));
     }
 
     let sidebar_list = List::new(items).block(
@@ -1297,7 +1444,8 @@ fn render_secrets_tab(f: &mut Frame, app: &mut App, area: Rect) {
 
             let p = Paragraph::new(details)
                 .block(detail_block)
-                .wrap(Wrap { trim: true });
+                .wrap(Wrap { trim: true })
+                .scroll((app.detail_scroll, 0));
             f.render_widget(p, chunks[1]);
             return;
         }
@@ -1332,63 +1480,88 @@ fn render_permissions_tab(f: &mut Frame, app: &mut App, area: Rect) {
         Color::DarkGray
     };
 
+    let col_constraints = if area.width < 75 {
+        vec![
+            Constraint::Length(12),
+            Constraint::Percentage(55),
+            Constraint::Percentage(45),
+        ]
+    } else {
+        vec![
+            Constraint::Length(14),
+            Constraint::Percentage(40),
+            Constraint::Percentage(25),
+            Constraint::Length(18),
+        ]
+    };
+
+    let header_cells = if area.width < 75 {
+        vec![
+            Span::styled("FINGERPRINT", Style::default().fg(Color::Cyan).bold()),
+            Span::styled("COMMAND / NAME", Style::default().fg(Color::Cyan).bold()),
+            Span::styled("SECRETS", Style::default().fg(Color::Cyan).bold()),
+        ]
+    } else {
+        vec![
+            Span::styled("FINGERPRINT", Style::default().fg(Color::Cyan).bold()),
+            Span::styled("COMMAND / NAME", Style::default().fg(Color::Cyan).bold()),
+            Span::styled("GRANTED SECRETS", Style::default().fg(Color::Cyan).bold()),
+            Span::styled("CREATED DATE", Style::default().fg(Color::Cyan).bold()),
+        ]
+    };
+
     let rows: Vec<Row> = if app.grants_list.is_empty() {
         Vec::new()
     } else {
         app.grants_list
             .iter()
             .map(|(id, cmd, secrets, created)| {
-                Row::new(vec![
-                    Span::styled(id, Style::default().fg(Color::Yellow).bold()),
-                    Span::styled(cmd, Style::default().fg(Color::White)),
-                    Span::styled(secrets, Style::default().fg(Color::Cyan)),
-                    Span::styled(created, Style::default().fg(Color::DarkGray)),
-                ])
-                .height(1)
+                let cells = if area.width < 75 {
+                    vec![
+                        Span::styled(id, Style::default().fg(Color::Yellow).bold()),
+                        Span::styled(cmd, Style::default().fg(Color::White)),
+                        Span::styled(secrets, Style::default().fg(Color::Cyan)),
+                    ]
+                } else {
+                    vec![
+                        Span::styled(id, Style::default().fg(Color::Yellow).bold()),
+                        Span::styled(cmd, Style::default().fg(Color::White)),
+                        Span::styled(secrets, Style::default().fg(Color::Cyan)),
+                        Span::styled(created, Style::default().fg(Color::DarkGray)),
+                    ]
+                };
+                Row::new(cells).height(1)
             })
             .collect()
     };
 
-    let title = format!(" Active TOFU Permissions ({}) ", app.grants_list.len());
-
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(14),
-            Constraint::Percentage(40),
-            Constraint::Percentage(25),
-            Constraint::Length(18),
-        ],
-    )
-    .header(
-        Row::new(vec![
-            Span::styled("FINGERPRINT", Style::default().fg(Color::Cyan).bold()),
-            Span::styled("COMMAND / NAME", Style::default().fg(Color::Cyan).bold()),
-            Span::styled("GRANTED SECRETS", Style::default().fg(Color::Cyan).bold()),
-            Span::styled("CREATED DATE", Style::default().fg(Color::Cyan).bold()),
-        ])
-        .bottom_margin(1),
-    )
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(border_color))
-            .title(Span::styled(
-                title,
-                if is_focused {
-                    Style::default().fg(Color::Cyan).bold()
-                } else {
-                    Style::default().fg(Color::White)
-                },
-            )),
-    )
-    .highlight_style(
-        Style::default()
-            .bg(Color::Rgb(30, 45, 65))
-            .fg(Color::Yellow)
-            .bold(),
+    let title = format!(
+        " Active TOFU Permissions ({}) [Enter: Full Details] ",
+        app.grants_list.len()
     );
+
+    let table = Table::new(rows, col_constraints)
+        .header(Row::new(header_cells).bottom_margin(1))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(border_color))
+                .title(Span::styled(
+                    title,
+                    if is_focused {
+                        Style::default().fg(Color::Cyan).bold()
+                    } else {
+                        Style::default().fg(Color::White)
+                    },
+                )),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::Rgb(30, 45, 65))
+                .fg(Color::Yellow)
+                .bold(),
+        );
 
     f.render_stateful_widget(table, area, &mut app.permissions_state);
 }
@@ -1574,7 +1747,10 @@ fn render_tool_profiles_tab(f: &mut Frame, app: &mut App, area: Rect) {
                 ),
             ]));
 
-            let p_detail = Paragraph::new(lines).block(detail_block);
+            let p_detail = Paragraph::new(lines)
+                .block(detail_block)
+                .scroll((app.detail_scroll, 0))
+                .wrap(Wrap { trim: true });
             f.render_widget(p_detail, chunks[1]);
             return;
         }
@@ -1593,140 +1769,199 @@ fn render_tool_profiles_tab(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(empty_msg, chunks[1]);
 }
 
-fn render_system_tab(f: &mut Frame, _app: &mut App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(7), // Vault
-            Constraint::Length(7), // Policy
-            Constraint::Min(6),    // Sandbox
-        ])
-        .split(area);
+fn render_system_tab(f: &mut Frame, app: &mut App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Span::styled(
+            " [ MCP Sentinel — Security & System Architecture ] ",
+            Style::default().fg(Color::Cyan).bold(),
+        ));
 
-    // Card 1: Vault
-    let vault_lines = vec![
-        Line::from(vec![
-            Span::styled("Backend Engine:     ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                "Windows Credential Manager / Apple Keychain / Linux SecretService",
-                Style::default().fg(Color::White).bold(),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Disk Exposure:      ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                "ZERO Plaintext Secrets on Disk",
-                Style::default().fg(Color::Green).bold(),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Injection Vector:   ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                "In-Memory Environment Injection strictly during exec()",
-                Style::default().fg(Color::Cyan),
-            ),
-        ]),
-    ];
-    let card1 = Paragraph::new(vault_lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::DarkGray))
-            .title(Span::styled(
-                " [ 1. OS-Native Secret Vault ] ",
-                Style::default().fg(Color::Cyan).bold(),
-            )),
-    );
-    f.render_widget(card1, chunks[0]);
+    let mut lines = Vec::new();
 
-    // Card 2: Policy
-    let policy_lines = vec![
-        Line::from(vec![
-            Span::styled("Integrity Guard:    ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                "HMAC-SHA256 Cryptographic Signature on permissions.json",
-                Style::default().fg(Color::Green).bold(),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Master Entropy:     ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                "256-bit Hardware-Generated CSPRNG Key stored in Keyring",
-                Style::default().fg(Color::Cyan),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Access Control:     ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                "DACL (Windows) / 0600 (Unix) — Strict Least Privilege",
-                Style::default().fg(Color::Yellow),
-            ),
-        ]),
-    ];
-    let card2 = Paragraph::new(policy_lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::DarkGray))
-            .title(Span::styled(
-                " [ 2. TOFU Policy & Cryptographic Integrity ] ",
-                Style::default().fg(Color::Green).bold(),
-            )),
-    );
-    f.render_widget(card2, chunks[1]);
+    // Section 1: OS-Native Secret Vault
+    lines.push(Line::from(vec![
+        Span::styled(
+            "1. OS-Native Secret Vault",
+            Style::default().fg(Color::Cyan).bold(),
+        ),
+        Span::styled(" (Hardware Keyring)", Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  • Backend Engine:   ",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            "Windows Credential Manager / Apple Keychain / Linux SecretService",
+            Style::default().fg(Color::White).bold(),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  • Disk Exposure:    ",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            "ZERO Plaintext Secrets on Disk",
+            Style::default().fg(Color::Green).bold(),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  • Injection Vector: ",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            "In-Memory Environment Injection strictly during exec()",
+            Style::default().fg(Color::Cyan),
+        ),
+    ]));
+    lines.push(Line::from(""));
 
-    // Card 3: Isolation Sandbox
-    let sandbox_lines = vec![
-        Line::from(vec![
-            Span::styled("Environment Jail:   ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                "Default-Deny Whitelist (AWS, SSH, GITHUB keys purged from child)",
-                Style::default().fg(Color::Green),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Anti-Recursion:     ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                "MCP_SENTINEL_CHILD_CONTEXT=1 (Child recursion blocked with Exit 13)",
-                Style::default().fg(Color::Cyan),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Process Lifecycle:  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                "Windows Job Object (KILL_ON_JOB_CLOSE) / Unix Signal Guard",
-                Style::default().fg(Color::Yellow),
-            ),
-        ]),
-    ];
-    let card3 = Paragraph::new(sandbox_lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::DarkGray))
-            .title(Span::styled(
-                " [ 3. Subprocess Sandbox & Proxy Stream ] ",
-                Style::default().fg(Color::Yellow).bold(),
-            )),
-    );
-    f.render_widget(card3, chunks[2]);
+    // Section 2: Policy & Cryptographic Integrity
+    lines.push(Line::from(vec![
+        Span::styled(
+            "2. TOFU Policy & Cryptographic Integrity",
+            Style::default().fg(Color::Green).bold(),
+        ),
+        Span::styled(" (Anti-Tamper)", Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  • Integrity Guard:  ",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            "HMAC-SHA256 Cryptographic Signature on permissions.json",
+            Style::default().fg(Color::Green).bold(),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  • Master Entropy:   ",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            "256-bit Hardware-Generated CSPRNG Key stored in Keyring",
+            Style::default().fg(Color::Cyan),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  • Access Control:   ",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            "DACL (Windows) / 0600 (Unix) — Strict Least Privilege",
+            Style::default().fg(Color::Yellow),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
+    // Section 3: Isolation Sandbox & Stream Proxy
+    lines.push(Line::from(vec![
+        Span::styled(
+            "3. Subprocess Sandbox & Proxy Stream",
+            Style::default().fg(Color::Yellow).bold(),
+        ),
+        Span::styled(" (L7 Guard)", Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  • Environment Jail: ",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            "Default-Deny Whitelist (AWS, SSH, GITHUB keys purged from child)",
+            Style::default().fg(Color::Green),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  • Anti-Recursion:   ",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            "MCP_SENTINEL_CHILD_CONTEXT=1 (Child recursion blocked with Exit 13)",
+            Style::default().fg(Color::Cyan),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  • Process Lifecycle:",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            "Windows Job Object (KILL_ON_JOB_CLOSE) / Unix Signal Guard",
+            Style::default().fg(Color::Yellow),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
+    // Section 4: Audit & Tool Policies
+    lines.push(Line::from(vec![
+        Span::styled(
+            "4. Audit Logging & Tool Policies",
+            Style::default().fg(Color::Magenta).bold(),
+        ),
+        Span::styled(" (Monitoring)", Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  • Audit Log File:   ",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            "~/.mcp-sentinel/audit.log (Opt-in via 'mcp-sentinel audit enable')",
+            Style::default().fg(Color::White),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  • Tool Policies:    ",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            "~/.mcp-sentinel/tool_policies.json (Whitelist / Blacklist presets)",
+            Style::default().fg(Color::White),
+        ),
+    ]));
+
+    let p = Paragraph::new(lines)
+        .block(block)
+        .scroll((app.detail_scroll, 0))
+        .wrap(Wrap { trim: true });
+
+    f.render_widget(p, area);
 }
 
 fn render_footer(f: &mut Frame, app: &mut App, area: Rect) {
+    let (left_pct, right_pct) = if area.width < 90 { (65, 35) } else { (58, 42) };
+
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+        .constraints([
+            Constraint::Percentage(left_pct),
+            Constraint::Percentage(right_pct),
+        ])
         .split(area);
 
     let tips = match app.focus {
         FocusArea::Sidebar => "[Up/Down] Menu  [Enter] Select  [Right/Tab] Enter View  [q] Quit",
         FocusArea::Content => match app.current_tab {
             AppTab::Secrets => {
-                "[Up/Down] Select  [Enter/v] Reveal  [e] Edit  [d] Delete  [Left/Esc] Menu"
+                "[Up/Down] Select  [Enter/v] Reveal  [e] Edit  [d] Delete  [PgUp/Dn] Scroll  [Left/Esc] Menu"
             }
-            AppTab::Permissions => "[Up/Down] Select  [Enter/d] Revoke  [x] Reset  [Left/Esc] Menu",
-            AppTab::ToolProfiles => "[Up/Down] Select  [d] Delete Custom Profile  [Left/Esc] Menu",
-            AppTab::System => "[Left/Esc] Back to Menu  [q] Quit",
+            AppTab::Permissions => {
+                "[Up/Down] Select  [Enter/v] Details  [d] Revoke  [x] Reset  [Left/Esc] Menu"
+            }
+            AppTab::ToolProfiles => {
+                "[Up/Down] Select  [d] Delete Custom  [PgUp/Dn] Scroll  [Left/Esc] Menu"
+            }
+            AppTab::System => "[Up/Down/PgUp/Dn] Scroll  [Left/Esc] Menu  [q] Quit",
         },
     };
 
@@ -1979,7 +2214,7 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
         }
 
         ModalState::RevealSecret { key, value } => {
-            let popup_area = centered_rect_exact(62, 10, area);
+            let popup_area = centered_rect_exact(66, 12, area);
             f.render_widget(Clear, popup_area);
 
             let block = Block::default()
@@ -2007,13 +2242,96 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 ]),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "Press [Esc] or [Enter] to close",
+                    "[Up/Down/PgUp/Dn] Scroll  |  [Esc/Enter] Close",
                     Style::default().fg(Color::DarkGray),
                 )),
             ])
             .style(modal_bg)
             .alignment(Alignment::Center)
+            .scroll((app.modal_scroll, 0))
             .wrap(Wrap { trim: true });
+
+            f.render_widget(p, inner);
+        }
+
+        ModalState::ViewGrant {
+            id,
+            name,
+            command,
+            secrets,
+            created_at,
+        } => {
+            let popup_area = centered_rect_exact(76, 16, area);
+            f.render_widget(Clear, popup_area);
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .style(modal_bg)
+                .title(Span::styled(
+                    " [ Authorization Grant Inspection ] ",
+                    Style::default().fg(Color::Cyan).bold(),
+                ));
+
+            let inner = block.inner(popup_area);
+            f.render_widget(block, popup_area);
+
+            let mut lines = Vec::new();
+            lines.push(Line::from(vec![
+                Span::styled("MCP Client Name: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    name.as_deref().unwrap_or("(Unnamed Client)"),
+                    Style::default().fg(Color::White).bold(),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Grant Full ID:   ", Style::default().fg(Color::DarkGray)),
+                Span::styled(id, Style::default().fg(Color::Rgb(140, 200, 255))),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Authorized At:   ", Style::default().fg(Color::DarkGray)),
+                Span::styled(created_at, Style::default().fg(Color::DarkGray)),
+            ]));
+            lines.push(Line::from(""));
+
+            lines.push(Line::from(Span::styled(
+                "Authorized Command & Executable Args:",
+                Style::default().fg(Color::Yellow).bold(),
+            )));
+            lines.push(Line::from(Span::styled(
+                format!("  {}", command),
+                Style::default().fg(Color::White),
+            )));
+            lines.push(Line::from(""));
+
+            lines.push(Line::from(Span::styled(
+                "Injected Secrets / Environment Aliases:",
+                Style::default().fg(Color::Green).bold(),
+            )));
+            if secrets.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  (No secrets attached to this grant)",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                for s in secrets {
+                    lines.push(Line::from(vec![
+                        Span::styled("  • ", Style::default().fg(Color::Green).bold()),
+                        Span::styled(s, Style::default().fg(Color::Cyan)),
+                    ]));
+                }
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "[Up/Down/PgUp/Dn] Scroll  |  [d] Revoke  |  [Esc/Enter] Close",
+                Style::default().fg(Color::DarkGray),
+            )));
+
+            let p = Paragraph::new(lines)
+                .style(modal_bg)
+                .scroll((app.modal_scroll, 0))
+                .wrap(Wrap { trim: true });
 
             f.render_widget(p, inner);
         }
@@ -2077,8 +2395,11 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn centered_rect_exact(width: u16, height: u16, r: Rect) -> Rect {
-    let actual_width = width.min(r.width.saturating_sub(4));
-    let actual_height = height.min(r.height.saturating_sub(2));
+    let margin_x = if r.width > 4 { 2 } else { 0 };
+    let margin_y = if r.height > 2 { 1 } else { 0 };
+
+    let actual_width = width.min(r.width.saturating_sub(margin_x * 2));
+    let actual_height = height.min(r.height.saturating_sub(margin_y * 2));
 
     let x = r.x + (r.width.saturating_sub(actual_width)) / 2;
     let y = r.y + (r.height.saturating_sub(actual_height)) / 2;
@@ -2176,6 +2497,8 @@ mod tests {
             modal: ModalState::None,
             status_message: None,
             should_quit: false,
+            detail_scroll: 0,
+            modal_scroll: 0,
         };
 
         app.reload_tool_profiles();
