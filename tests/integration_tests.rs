@@ -11,7 +11,7 @@ fn test_cli_help_flag() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("mcp-sentinel isolates environment variables"));
     assert!(stdout.contains("run"));
-    assert!(stdout.contains("secret"));
+    assert!(stdout.contains("secrets"));
     assert!(stdout.contains("permissions"));
 }
 
@@ -56,4 +56,12 @@ fn test_cli_secret_list() {
         .expect("Failed to execute mcp-sentinel secret list");
 
     assert!(output.status.success());
+
+    // Test official plural form 'secrets'
+    let output_plural = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args(["secrets", "list"])
+        .output()
+        .expect("Failed to execute mcp-sentinel secrets list");
+
+    assert!(output_plural.status.success());
 }

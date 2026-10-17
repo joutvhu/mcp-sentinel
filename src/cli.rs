@@ -31,8 +31,8 @@ pub enum Commands {
     },
 
     /// Manage secrets stored in the OS Keyring
-    #[command(alias = "secrets")]
-    Secret {
+    #[command(alias = "secret")]
+    Secrets {
         #[command(subcommand)]
         action: SecretCommands,
     },
@@ -112,9 +112,9 @@ mod tests {
     #[test]
     fn test_parse_secret_commands() {
         // Set
-        let cli = Cli::try_parse_from(["mcp-sentinel", "secret", "set", "MY_KEY", "MY_VAL"]).unwrap();
+        let cli = Cli::try_parse_from(["mcp-sentinel", "secrets", "set", "MY_KEY", "MY_VAL"]).unwrap();
         match cli.command {
-            Commands::Secret {
+            Commands::Secrets {
                 action: SecretCommands::Set { key, value },
             } => {
                 assert_eq!(key, "MY_KEY");
@@ -124,9 +124,9 @@ mod tests {
         }
 
         // Get
-        let cli = Cli::try_parse_from(["mcp-sentinel", "secret", "get", "MY_KEY"]).unwrap();
+        let cli = Cli::try_parse_from(["mcp-sentinel", "secrets", "get", "MY_KEY"]).unwrap();
         match cli.command {
-            Commands::Secret {
+            Commands::Secrets {
                 action: SecretCommands::Get { key },
             } => {
                 assert_eq!(key, "MY_KEY");
@@ -135,9 +135,9 @@ mod tests {
         }
 
         // Delete
-        let cli = Cli::try_parse_from(["mcp-sentinel", "secret", "delete", "MY_KEY"]).unwrap();
+        let cli = Cli::try_parse_from(["mcp-sentinel", "secrets", "delete", "MY_KEY"]).unwrap();
         match cli.command {
-            Commands::Secret {
+            Commands::Secrets {
                 action: SecretCommands::Delete { key },
             } => {
                 assert_eq!(key, "MY_KEY");
@@ -188,8 +188,8 @@ mod tests {
         let cli_p = Cli::try_parse_from(["mcp-sentinel", "perm", "list"]).unwrap();
         assert!(matches!(cli_p.command, Commands::Permissions { .. }));
 
-        // "secrets" plural alias
-        let cli_sec = Cli::try_parse_from(["mcp-sentinel", "secrets", "list"]).unwrap();
-        assert!(matches!(cli_sec.command, Commands::Secret { .. }));
+        // "secret" singular alias for Secrets
+        let cli_sec = Cli::try_parse_from(["mcp-sentinel", "secret", "list"]).unwrap();
+        assert!(matches!(cli_sec.command, Commands::Secrets { .. }));
     }
 }

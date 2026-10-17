@@ -93,7 +93,7 @@ async fn main() {
             }
         }
 
-        Commands::Secret { action } => match action {
+        Commands::Secrets { action } => match action {
             SecretCommands::Set { key, value } => {
                 if let Err(msg) = vault::validate_key_name(&key) {
                     eprintln!("Error: {}", msg);
