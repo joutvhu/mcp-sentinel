@@ -173,3 +173,26 @@ fn hack_test_requesting_missing_secret_fails_safely() {
         "Must report missing secret name in error log"
     );
 }
+
+/// HACK ATTACK 6: Child Sandbox Jailbreak & Recursive Secret Theft
+/// A compromised child MCP server attempts to invoke mcp-sentinel secret get/list.
+/// mcp-sentinel must detect the child context lock, abort with exit code 13, and refuse to leak any secret!
+#[test]
+fn hack_test_child_process_cannot_invoke_sentinel() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args(["secret", "get", "TEST_KEY"])
+        .env("MCP_SENTINEL_CHILD_CONTEXT", "1")
+        .output()
+        .expect("Failed to execute mcp-sentinel with child context");
+
+    assert_eq!(
+        output.status.code(),
+        Some(13),
+        "Must exit with permission denied code (13)"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Security Violation"),
+        "Must output security violation error"
+    );
+}

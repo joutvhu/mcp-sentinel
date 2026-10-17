@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 use std::env;
+use std::sync::OnceLock;
+
+static CURRENT_EXE_DIR: OnceLock<Option<String>> = OnceLock::new();
 
 #[cfg(windows)]
 const SAFE_KEYS: &[&str] = &[
@@ -28,15 +31,40 @@ const SAFE_KEYS: &[&str] = &[
 ];
 
 /// Builds a sanitized environment map containing only safe system variables
-/// and explicitly injected secrets.
+/// and explicitly injected secrets. Filters out the directory containing the mcp-sentinel
+/// binary to prevent child processes from calling sentinel, and injects a child security context.
 pub fn build_sanitized_env(secrets_to_inject: &HashMap<String, String>) -> HashMap<String, String> {
     let mut clean_env = HashMap::new();
 
+    let current_exe_dir_str = CURRENT_EXE_DIR.get_or_init(|| {
+        env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase()))
+    });
+
     for &key in SAFE_KEYS {
         if let Ok(val) = env::var(key) {
+            if key.eq_ignore_ascii_case("PATH") {
+                if let Some(ref exe_dir_str) = current_exe_dir_str {
+                    let filtered_paths: Vec<_> = env::split_paths(&val)
+                        .filter(|p| {
+                            let p_str = p.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
+                            p_str != *exe_dir_str
+                        })
+                        .collect();
+
+                    if let Ok(new_path) = env::join_paths(filtered_paths) {
+                        clean_env.insert(key.to_string(), new_path.to_string_lossy().to_string());
+                        continue;
+                    }
+                }
+            }
             clean_env.insert(key.to_string(), val);
         }
     }
+
+    // Inject child security context flag to prevent child processes from calling sentinel commands
+    clean_env.insert("MCP_SENTINEL_CHILD_CONTEXT".to_string(), "1".to_string());
 
     // Inject approved secrets
     for (k, v) in secrets_to_inject {
@@ -84,5 +112,16 @@ mod tests {
         let env_map = build_sanitized_env(&secrets);
         assert_eq!(env_map.get("SECRET_1"), Some(&"val_1".to_string()));
         assert_eq!(env_map.get("SECRET_2"), Some(&"val_2".to_string()));
+    }
+
+    #[test]
+    fn test_sanitized_env_child_security_context() {
+        let secrets = HashMap::new();
+        let env_map = build_sanitized_env(&secrets);
+        assert_eq!(
+            env_map.get("MCP_SENTINEL_CHILD_CONTEXT"),
+            Some(&"1".to_string()),
+            "Child environment must always contain child security context lock"
+        );
     }
 }

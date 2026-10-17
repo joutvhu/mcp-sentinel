@@ -18,6 +18,15 @@ async fn main() {
 
     let cli = Cli::parse();
 
+    // Security Hardening: Anti-recursion / Child process isolation
+    // If mcp-sentinel is invoked from within a child MCP process sandbox, block it immediately!
+    if std::env::var("MCP_SENTINEL_CHILD_CONTEXT").is_ok() {
+        eprintln!(
+            "[mcp-sentinel] Security Violation: Invoking mcp-sentinel is strictly prohibited from within a child MCP sandbox."
+        );
+        exit(13);
+    }
+
     match cli.command {
         Commands::Run { secrets, name, cmd } => {
             if cmd.is_empty() {
