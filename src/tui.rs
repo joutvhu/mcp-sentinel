@@ -19,6 +19,7 @@ use ratatui::{
 };
 
 use crate::policy::{self, PolicyFile};
+use crate::tool_policy::{self, ToolProfile};
 use crate::vault;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -31,7 +32,8 @@ pub enum FocusArea {
 pub enum AppTab {
     Secrets = 0,
     Permissions = 1,
-    System = 2,
+    ToolProfiles = 2,
+    System = 3,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -50,7 +52,12 @@ pub const SIDEBAR_MENU: &[(SidebarAction, &str, &str)] = &[
         "Permissions (TOFU)",
         "[2]",
     ),
-    (SidebarAction::Tab(AppTab::System), "System Status", "[3]"),
+    (
+        SidebarAction::Tab(AppTab::ToolProfiles),
+        "Tool Policies",
+        "[3]",
+    ),
+    (SidebarAction::Tab(AppTab::System), "System Status", "[4]"),
     (SidebarAction::AddSecret, "Add Secret", "[a]"),
     (SidebarAction::RefreshVault, "Refresh Data", "[r]"),
     (SidebarAction::ResetGrants, "Reset Permissions", "[x]"),
@@ -219,6 +226,7 @@ pub enum ModalState {
     },
     ConfirmDeleteSecret(String),
     ConfirmRevokeGrant(String),
+    ConfirmDeleteProfile(String),
     ConfirmResetGrants,
     RevealSecret {
         key: String,
@@ -239,6 +247,8 @@ pub struct App {
     pub policy: PolicyFile,
     pub grants_list: Vec<(String, String, String, String)>,
     pub permissions_state: TableState,
+    pub tool_profiles: Vec<ToolProfile>,
+    pub tool_profiles_state: ListState,
     pub modal: ModalState,
     pub status_message: Option<(String, Color)>,
     pub should_quit: bool,
@@ -255,6 +265,8 @@ impl App {
             policy: PolicyFile::default(),
             grants_list: Vec::new(),
             permissions_state: TableState::default(),
+            tool_profiles: Vec::new(),
+            tool_profiles_state: ListState::default(),
             modal: ModalState::None,
             status_message: Some((
                 "Use [Up/Down] arrows to navigate menu, [Enter] to select.".to_string(),
@@ -264,6 +276,7 @@ impl App {
         };
         app.reload_secrets();
         app.reload_permissions();
+        app.reload_tool_profiles();
         app
     }
 
@@ -315,6 +328,27 @@ impl App {
         }
     }
 
+    pub fn reload_tool_profiles(&mut self) {
+        if let Ok(pfile) = tool_policy::load_profiles() {
+            let mut profiles: Vec<ToolProfile> = pfile.profiles.into_values().collect();
+            profiles.sort_by(|a, b| a.name.cmp(&b.name));
+            self.tool_profiles = profiles;
+
+            if !self.tool_profiles.is_empty() {
+                if self.tool_profiles_state.selected().is_none() {
+                    self.tool_profiles_state.select(Some(0));
+                } else if let Some(selected) = self.tool_profiles_state.selected() {
+                    if selected >= self.tool_profiles.len() {
+                        self.tool_profiles_state
+                            .select(Some(self.tool_profiles.len() - 1));
+                    }
+                }
+            } else {
+                self.tool_profiles_state.select(None);
+            }
+        }
+    }
+
     pub fn sidebar_up(&mut self) {
         if self.sidebar_index > 0 {
             self.sidebar_index -= 1;
@@ -359,6 +393,15 @@ impl App {
                     self.permissions_state.select(Some(prev));
                 }
             }
+            AppTab::ToolProfiles => {
+                if !self.tool_profiles.is_empty() {
+                    let prev = match self.tool_profiles_state.selected() {
+                        Some(i) if i > 0 => i - 1,
+                        _ => self.tool_profiles.len() - 1,
+                    };
+                    self.tool_profiles_state.select(Some(prev));
+                }
+            }
             AppTab::System => {}
         }
     }
@@ -381,6 +424,15 @@ impl App {
                         _ => 0,
                     };
                     self.permissions_state.select(Some(next));
+                }
+            }
+            AppTab::ToolProfiles => {
+                if !self.tool_profiles.is_empty() {
+                    let next = match self.tool_profiles_state.selected() {
+                        Some(i) if i + 1 < self.tool_profiles.len() => i + 1,
+                        _ => 0,
+                    };
+                    self.tool_profiles_state.select(Some(next));
                 }
             }
             AppTab::System => {}
@@ -410,6 +462,21 @@ impl App {
         if let Some(i) = self.secrets_state.selected() {
             if let Some(key_name) = self.secrets.get(i) {
                 self.modal = ModalState::ConfirmDeleteSecret(key_name.clone());
+            }
+        }
+    }
+
+    pub fn open_delete_profile_modal(&mut self) {
+        if let Some(i) = self.tool_profiles_state.selected() {
+            if let Some(profile) = self.tool_profiles.get(i) {
+                if profile.name == "read-only" || profile.name == "no-destructive" {
+                    self.status_message = Some((
+                        format!("Built-in preset '{}' cannot be deleted.", profile.name),
+                        Color::Yellow,
+                    ));
+                } else {
+                    self.modal = ModalState::ConfirmDeleteProfile(profile.name.clone());
+                }
             }
         }
     }
@@ -651,6 +718,42 @@ fn main_loop<B: ratatui::backend::Backend>(
                         _ => {}
                     },
 
+                    ModalState::ConfirmDeleteProfile(profile_name) => match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            let name = profile_name.clone();
+                            match tool_policy::delete_profile(&name) {
+                                Ok(true) => {
+                                    app.reload_tool_profiles();
+                                    app.modal = ModalState::None;
+                                    app.status_message = Some((
+                                        format!("✓ Tool profile '{}' deleted successfully.", name),
+                                        Color::Green,
+                                    ));
+                                }
+                                Ok(false) => {
+                                    app.modal = ModalState::None;
+                                    app.status_message = Some((
+                                        format!("Profile '{}' not found.", name),
+                                        Color::Yellow,
+                                    ));
+                                }
+                                Err(e) => {
+                                    app.modal = ModalState::None;
+                                    app.status_message = Some((
+                                        format!("Error deleting profile: {}", e),
+                                        Color::Red,
+                                    ));
+                                }
+                            }
+                        }
+                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                            app.modal = ModalState::None;
+                            app.status_message =
+                                Some(("Delete profile cancelled.".to_string(), Color::DarkGray));
+                        }
+                        _ => {}
+                    },
+
                     ModalState::ConfirmResetGrants => match key.code {
                         KeyCode::Char('y') | KeyCode::Char('Y') => match policy::reset_grants() {
                             Ok(_) => {
@@ -752,8 +855,14 @@ fn main_loop<B: ratatui::backend::Backend>(
                                 continue;
                             }
                             KeyCode::Char('3') => {
-                                app.current_tab = AppTab::System;
+                                app.current_tab = AppTab::ToolProfiles;
                                 app.sidebar_index = 2;
+                                app.focus = FocusArea::Content;
+                                continue;
+                            }
+                            KeyCode::Char('4') => {
+                                app.current_tab = AppTab::System;
+                                app.sidebar_index = 3;
                                 app.focus = FocusArea::Content;
                                 continue;
                             }
@@ -764,8 +873,9 @@ fn main_loop<B: ratatui::backend::Backend>(
                             KeyCode::Char('r') => {
                                 app.reload_secrets();
                                 app.reload_permissions();
+                                app.reload_tool_profiles();
                                 app.status_message = Some((
-                                    "✓ Vault and policies reloaded.".to_string(),
+                                    "✓ Vault, permissions, and tool profiles reloaded.".to_string(),
                                     Color::Cyan,
                                 ));
                                 continue;
@@ -801,8 +911,9 @@ fn main_loop<B: ratatui::backend::Backend>(
                                             SidebarAction::RefreshVault => {
                                                 app.reload_secrets();
                                                 app.reload_permissions();
+                                                app.reload_tool_profiles();
                                                 app.status_message = Some((
-                                                    "✓ Vault and permissions refreshed."
+                                                    "✓ Vault, permissions, and tool profiles refreshed."
                                                         .to_string(),
                                                     Color::Cyan,
                                                 ));
@@ -841,6 +952,7 @@ fn main_loop<B: ratatui::backend::Backend>(
                                 KeyCode::Enter => match app.current_tab {
                                     AppTab::Secrets => app.open_reveal_modal(),
                                     AppTab::Permissions => app.open_revoke_modal(),
+                                    AppTab::ToolProfiles => {}
                                     AppTab::System => {}
                                 },
                                 KeyCode::Char('v') if app.current_tab == AppTab::Secrets => {
@@ -852,6 +964,7 @@ fn main_loop<B: ratatui::backend::Backend>(
                                 KeyCode::Char('d') | KeyCode::Delete => match app.current_tab {
                                     AppTab::Secrets => app.open_delete_modal(),
                                     AppTab::Permissions => app.open_revoke_modal(),
+                                    AppTab::ToolProfiles => app.open_delete_profile_modal(),
                                     AppTab::System => {}
                                 },
                                 _ => {}
@@ -893,6 +1006,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     match app.current_tab {
         AppTab::Secrets => render_secrets_tab(f, app, body_chunks[1]),
         AppTab::Permissions => render_permissions_tab(f, app, body_chunks[1]),
+        AppTab::ToolProfiles => render_tool_profiles_tab(f, app, body_chunks[1]),
         AppTab::System => render_system_tab(f, app, body_chunks[1]),
     }
 
@@ -1279,6 +1393,206 @@ fn render_permissions_tab(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(table, area, &mut app.permissions_state);
 }
 
+fn render_tool_profiles_tab(f: &mut Frame, app: &mut App, area: Rect) {
+    let is_focused = app.focus == FocusArea::Content;
+    let border_color = if is_focused {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
+
+    let chunks = if area.width >= 70 {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area)
+    };
+
+    // Left: Profile list
+    let items: Vec<ListItem> = if app.tool_profiles.is_empty() {
+        vec![ListItem::new(Line::from(Span::styled(
+            "  (No tool profiles found)",
+            Style::default().fg(Color::DarkGray),
+        )))]
+    } else {
+        app.tool_profiles
+            .iter()
+            .enumerate()
+            .map(|(i, prof)| {
+                let is_sel = app.tool_profiles_state.selected() == Some(i);
+                let prefix = if is_sel { "► " } else { "  " };
+                let is_builtin = prof.name == "read-only" || prof.name == "no-destructive";
+                let tag = if is_builtin { " [Preset]" } else { " [Custom]" };
+                let style = if is_sel {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .bg(Color::Rgb(30, 45, 65))
+                        .bold()
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                let tag_style = if is_builtin {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::Green)
+                };
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(prefix, style),
+                    Span::styled(&prof.name, style),
+                    Span::styled(tag, tag_style),
+                ]))
+            })
+            .collect()
+    };
+
+    let list_title = format!(" Tool Profiles ({}) ", app.tool_profiles.len());
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(border_color))
+                .title(Span::styled(
+                    list_title,
+                    if is_focused {
+                        Style::default().fg(Color::Cyan).bold()
+                    } else {
+                        Style::default().fg(Color::White)
+                    },
+                )),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::Rgb(30, 45, 65))
+                .fg(Color::Yellow)
+                .bold(),
+        );
+
+    f.render_stateful_widget(list, chunks[0], &mut app.tool_profiles_state);
+
+    // Right: Selected Profile Details
+    let detail_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Span::styled(
+            " Profile Security Specification ",
+            Style::default().fg(Color::White).bold(),
+        ));
+
+    if let Some(i) = app.tool_profiles_state.selected() {
+        if let Some(prof) = app.tool_profiles.get(i) {
+            let is_builtin = prof.name == "read-only" || prof.name == "no-destructive";
+            let mut lines = Vec::new();
+
+            lines.push(Line::from(vec![
+                Span::styled("Profile Name:     ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&prof.name, Style::default().fg(Color::Yellow).bold()),
+                Span::raw("  "),
+                if is_builtin {
+                    Span::styled(
+                        "[ BUILT-IN PRESET ]",
+                        Style::default().fg(Color::Cyan).bold(),
+                    )
+                } else {
+                    Span::styled(
+                        "[ CUSTOM PROFILE ]",
+                        Style::default().fg(Color::Green).bold(),
+                    )
+                },
+            ]));
+
+            let desc = prof
+                .description
+                .as_deref()
+                .unwrap_or("(No description provided)");
+            lines.push(Line::from(vec![
+                Span::styled("Description:      ", Style::default().fg(Color::DarkGray)),
+                Span::styled(desc, Style::default().fg(Color::White)),
+            ]));
+
+            lines.push(Line::from(vec![
+                Span::styled("Enforcement:      ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "Layer 7 JSON-RPC Interceptor & Drop",
+                    Style::default().fg(Color::Cyan),
+                ),
+            ]));
+
+            lines.push(Line::from(""));
+
+            lines.push(Line::from(vec![Span::styled(
+                "Allowed Tool Patterns (Whitelist):",
+                Style::default().fg(Color::Green).bold(),
+            )]));
+            if prof.allow.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  (None)",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                for pat in &prof.allow {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ✓ ", Style::default().fg(Color::Green).bold()),
+                        Span::styled(pat, Style::default().fg(Color::White)),
+                    ]));
+                }
+            }
+
+            lines.push(Line::from(""));
+
+            lines.push(Line::from(vec![Span::styled(
+                "Denied Tool Patterns (Blacklist - Strict Precedence):",
+                Style::default().fg(Color::Red).bold(),
+            )]));
+            if prof.deny.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  (None - no tools blacklisted)",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                for pat in &prof.deny {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ✗ ", Style::default().fg(Color::Red).bold()),
+                        Span::styled(pat, Style::default().fg(Color::Red)),
+                    ]));
+                }
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("CLI Run Usage:    ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("mcp-sentinel run --profile {} -- <command>", prof.name),
+                    Style::default().fg(Color::Rgb(140, 200, 255)),
+                ),
+            ]));
+
+            let p_detail = Paragraph::new(lines).block(detail_block);
+            f.render_widget(p_detail, chunks[1]);
+            return;
+        }
+    }
+
+    let empty_msg = Paragraph::new(vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "Select a profile on the left to inspect its security rules.",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ])
+    .block(detail_block)
+    .alignment(Alignment::Center);
+
+    f.render_widget(empty_msg, chunks[1]);
+}
+
 fn render_system_tab(f: &mut Frame, _app: &mut App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -1411,6 +1725,7 @@ fn render_footer(f: &mut Frame, app: &mut App, area: Rect) {
                 "[Up/Down] Select  [Enter/v] Reveal  [e] Edit  [d] Delete  [Left/Esc] Menu"
             }
             AppTab::Permissions => "[Up/Down] Select  [Enter/d] Revoke  [x] Reset  [Left/Esc] Menu",
+            AppTab::ToolProfiles => "[Up/Down] Select  [d] Delete Custom Profile  [Left/Esc] Menu",
             AppTab::System => "[Left/Esc] Back to Menu  [q] Quit",
         },
     };
@@ -1531,6 +1846,43 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 Line::from(""),
                 Line::from(vec![
                     Span::raw("Are you sure you want to permanently delete: "),
+                    Span::styled(name, Style::default().fg(Color::Yellow).bold()),
+                    Span::raw("?"),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  [y] ", Style::default().fg(Color::Red).bold()),
+                    Span::raw("Yes, Delete  |  "),
+                    Span::styled("[n / Esc] ", Style::default().fg(Color::Green).bold()),
+                    Span::raw("Cancel"),
+                ]),
+            ])
+            .style(modal_bg)
+            .alignment(Alignment::Center);
+
+            f.render_widget(p, inner);
+        }
+
+        ModalState::ConfirmDeleteProfile(name) => {
+            let popup_area = centered_rect_exact(56, 8, area);
+            f.render_widget(Clear, popup_area);
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .style(modal_bg)
+                .title(Span::styled(
+                    " [ Confirm Delete Tool Profile ] ",
+                    Style::default().fg(Color::Red).bold(),
+                ));
+
+            let inner = block.inner(popup_area);
+            f.render_widget(block, popup_area);
+
+            let p = Paragraph::new(vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::raw("Are you sure you want to delete profile: "),
                     Span::styled(name, Style::default().fg(Color::Yellow).bold()),
                     Span::raw("?"),
                 ]),
@@ -1806,5 +2158,40 @@ mod tests {
 
         let unfocused = field.to_display_line_with_width(false, 40);
         assert!(!unfocused.spans.is_empty());
+    }
+
+    #[test]
+    fn test_app_tool_profiles_initialization() {
+        let mut app = App {
+            focus: FocusArea::Sidebar,
+            current_tab: AppTab::ToolProfiles,
+            sidebar_index: 2,
+            secrets: Vec::new(),
+            secrets_state: ListState::default(),
+            policy: PolicyFile::default(),
+            grants_list: Vec::new(),
+            permissions_state: TableState::default(),
+            tool_profiles: Vec::new(),
+            tool_profiles_state: ListState::default(),
+            modal: ModalState::None,
+            status_message: None,
+            should_quit: false,
+        };
+
+        app.reload_tool_profiles();
+        // Built-in presets should be loaded
+        assert!(app.tool_profiles.iter().any(|p| p.name == "read-only"));
+        assert!(app.tool_profiles.iter().any(|p| p.name == "no-destructive"));
+        assert!(app.tool_profiles_state.selected().is_some());
+
+        // Test navigation
+        let initial_sel = app.tool_profiles_state.selected().unwrap();
+        app.content_down();
+        let next_sel = app.tool_profiles_state.selected().unwrap();
+        if app.tool_profiles.len() > 1 {
+            assert_ne!(initial_sel, next_sel);
+        }
+        app.content_up();
+        assert_eq!(app.tool_profiles_state.selected().unwrap(), initial_sel);
     }
 }

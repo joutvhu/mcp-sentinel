@@ -33,6 +33,18 @@ pub enum Commands {
         #[arg(long, alias = "once")]
         allow_once: bool,
 
+        /// Pre-configured Tool Policy Profile to enforce (e.g., read-only, no-destructive)
+        #[arg(long)]
+        profile: Option<String>,
+
+        /// Comma-separated list of tool name patterns to block (e.g., *drop*,*delete*)
+        #[arg(long, value_delimiter = ',')]
+        deny_tools: Vec<String>,
+
+        /// Comma-separated list of tool name patterns to allow exclusively (e.g., read_*,get_*)
+        #[arg(long, value_delimiter = ',')]
+        allow_tools: Vec<String>,
+
         /// Command and arguments to execute (after --)
         #[arg(last = true, required = true)]
         cmd: Vec<String>,
@@ -50,6 +62,13 @@ pub enum Commands {
     Permissions {
         #[command(subcommand)]
         action: PermCommands,
+    },
+
+    /// Manage tool call access policies and profiles (Layer 7 firewall)
+    #[command(alias = "profile", alias = "profiles")]
+    ToolPolicy {
+        #[command(subcommand)]
+        action: ToolPolicyCommands,
     },
 
     /// Launch the interactive Terminal User Interface (TUI) Dashboard
@@ -112,6 +131,36 @@ pub enum PermCommands {
     Reset,
 }
 
+#[derive(Subcommand, Debug)]
+pub enum ToolPolicyCommands {
+    /// List all configured tool policy profiles
+    List,
+    /// View details of a specific tool policy profile
+    Get {
+        /// Name of the profile
+        name: String,
+    },
+    /// Create or update a tool policy profile
+    Set {
+        /// Name of the profile (e.g. read-only, no-destructive)
+        name: String,
+        /// Comma-separated allowed tool patterns (e.g. read_*,get_*)
+        #[arg(short, long, value_delimiter = ',')]
+        allow: Vec<String>,
+        /// Comma-separated denied tool patterns (e.g. *drop*,*delete*)
+        #[arg(short, long, value_delimiter = ',')]
+        deny: Vec<String>,
+        /// Optional description of the profile
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Delete a tool policy profile
+    Delete {
+        /// Name of the profile to delete
+        name: String,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,14 +186,99 @@ mod tests {
                 cmd,
                 no_redact,
                 allow_once,
+                profile,
+                deny_tools,
+                allow_tools,
             } => {
                 assert_eq!(secrets, vec!["KEY_A".to_string(), "KEY_B".to_string()]);
                 assert_eq!(name, Some("My Server".to_string()));
                 assert_eq!(cmd, vec!["node".to_string(), "server.js".to_string()]);
                 assert!(!no_redact);
                 assert!(!allow_once);
+                assert_eq!(profile, None);
+                assert!(deny_tools.is_empty());
+                assert!(allow_tools.is_empty());
             }
             _ => panic!("Expected Commands::Run"),
+        }
+    }
+
+    #[test]
+    fn test_parse_run_command_with_tool_policy_flags() {
+        let args = vec![
+            "mcp-sentinel",
+            "run",
+            "--profile",
+            "read-only",
+            "--deny-tools",
+            "*drop*,*delete*",
+            "--allow-tools",
+            "read_*,get_*",
+            "--",
+            "node",
+            "server.js",
+        ];
+        let cli =
+            Cli::try_parse_from(args).expect("CLI should parse tool policy flags successfully");
+        match cli.command {
+            Commands::Run {
+                profile,
+                deny_tools,
+                allow_tools,
+                ..
+            } => {
+                assert_eq!(profile, Some("read-only".to_string()));
+                assert_eq!(
+                    deny_tools,
+                    vec!["*drop*".to_string(), "*delete*".to_string()]
+                );
+                assert_eq!(allow_tools, vec!["read_*".to_string(), "get_*".to_string()]);
+            }
+            _ => panic!("Expected Commands::Run"),
+        }
+    }
+
+    #[test]
+    fn test_parse_tool_policy_subcommands() {
+        // List
+        let cli = Cli::try_parse_from(["mcp-sentinel", "profile", "list"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::ToolPolicy {
+                action: ToolPolicyCommands::List
+            }
+        ));
+
+        // Set
+        let cli = Cli::try_parse_from([
+            "mcp-sentinel",
+            "tool-policy",
+            "set",
+            "custom-db",
+            "--allow",
+            "read_*,get_*",
+            "--deny",
+            "*drop*",
+            "--description",
+            "Safe DB profile",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::ToolPolicy {
+                action:
+                    ToolPolicyCommands::Set {
+                        name,
+                        allow,
+                        deny,
+                        description,
+                    },
+            } => {
+                assert_eq!(name, "custom-db");
+                assert_eq!(allow, vec!["read_*", "get_*"]);
+                assert_eq!(deny, vec!["*drop*"]);
+                assert_eq!(description, Some("Safe DB profile".to_string()));
+            }
+            _ => panic!("Expected ToolPolicyCommands::Set"),
         }
     }
 

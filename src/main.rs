@@ -2,8 +2,8 @@ use clap::Parser;
 use std::collections::HashMap;
 use std::process::exit;
 
-use mcp_sentinel::cli::{Cli, Commands, PermCommands, SecretCommands};
-use mcp_sentinel::{dialog, policy, proxy, sanitizer, tui, vault};
+use mcp_sentinel::cli::{Cli, Commands, PermCommands, SecretCommands, ToolPolicyCommands};
+use mcp_sentinel::{dialog, policy, proxy, sanitizer, tool_policy, tui, vault};
 
 #[tokio::main]
 async fn main() {
@@ -33,6 +33,9 @@ async fn main() {
             name,
             no_redact,
             allow_once,
+            profile,
+            deny_tools,
+            allow_tools,
             cmd,
         } => {
             if cmd.is_empty() {
@@ -125,8 +128,46 @@ async fn main() {
                 secrets_map.values().cloned().collect()
             };
 
-            // 5. Run proxy supervisor
-            match proxy::run_child_and_pipe(&cmd, clean_env, redact_secrets).await {
+            // 5. Resolve Tool Policy Profile (Layer 7 tool call firewall)
+            let mut effective_tool_profile = if let Some(ref prof_name) = profile {
+                match tool_policy::get_profile(prof_name) {
+                    Some(p) => Some(p),
+                    None => {
+                        eprintln!(
+                            "[mcp-sentinel] Error: Tool policy profile '{}' not found. Run 'mcp-sentinel profile list' to view available profiles.",
+                            prof_name
+                        );
+                        exit(1);
+                    }
+                }
+            } else if !deny_tools.is_empty() || !allow_tools.is_empty() {
+                Some(tool_policy::ToolProfile {
+                    name: "ad-hoc".to_string(),
+                    description: Some("Ad-hoc CLI tool policy rules".to_string()),
+                    allow: Vec::new(),
+                    deny: Vec::new(),
+                })
+            } else {
+                None
+            };
+
+            if let Some(ref mut p) = effective_tool_profile {
+                for d in deny_tools {
+                    if !p.deny.contains(&d) {
+                        p.deny.push(d);
+                    }
+                }
+                for a in allow_tools {
+                    if !p.allow.contains(&a) {
+                        p.allow.push(a);
+                    }
+                }
+            }
+
+            // 6. Run proxy supervisor
+            match proxy::run_child_and_pipe(&cmd, clean_env, redact_secrets, effective_tool_profile)
+                .await
+            {
                 Ok(code) => exit(code),
                 Err(e) => {
                     eprintln!("[mcp-sentinel] Execution error: {}", e);
@@ -230,6 +271,124 @@ async fn main() {
                 }
             },
         },
+
+        Commands::ToolPolicy { action } => {
+            match action {
+                ToolPolicyCommands::List => {
+                    let file = match tool_policy::load_profiles() {
+                        Ok(f) => f,
+                        Err(e) => {
+                            eprintln!("Error loading tool profiles: {}", e);
+                            exit(1);
+                        }
+                    };
+
+                    if file.profiles.is_empty() {
+                        println!("No tool policy profiles found.");
+                        println!("Tip: Create one using 'mcp-sentinel profile set <NAME> --deny <PATTERNS>'");
+                        return;
+                    }
+
+                    println!(
+                        "{:<18} {:<32} {:<24} {:<24}",
+                        "PROFILE", "DESCRIPTION", "ALLOWED TOOLS", "DENIED TOOLS"
+                    );
+                    println!("{:-<18} {:-<32} {:-<24} {:-<24}", "", "", "", "");
+
+                    let mut sorted_keys: Vec<&String> = file.profiles.keys().collect();
+                    sorted_keys.sort();
+
+                    for name in sorted_keys {
+                        let prof = &file.profiles[name];
+                        let desc = prof.description.as_deref().unwrap_or("-");
+                        let desc_short = if desc.len() > 30 {
+                            format!("{}...", &desc[..27])
+                        } else {
+                            desc.to_string()
+                        };
+                        let allow_str = if prof.allow.is_empty() {
+                            "* (all)".to_string()
+                        } else {
+                            prof.allow.join(", ")
+                        };
+                        let allow_short = if allow_str.len() > 22 {
+                            format!("{}...", &allow_str[..19])
+                        } else {
+                            allow_str
+                        };
+                        let deny_str = if prof.deny.is_empty() {
+                            "none".to_string()
+                        } else {
+                            prof.deny.join(", ")
+                        };
+                        let deny_short = if deny_str.len() > 22 {
+                            format!("{}...", &deny_str[..19])
+                        } else {
+                            deny_str
+                        };
+                        println!(
+                            "{:<18} {:<32} {:<24} {:<24}",
+                            name, desc_short, allow_short, deny_short
+                        );
+                    }
+                }
+                ToolPolicyCommands::Get { name } => match tool_policy::get_profile(&name) {
+                    Some(prof) => {
+                        println!("Profile:     {}", prof.name);
+                        if let Some(desc) = prof.description {
+                            println!("Description: {}", desc);
+                        }
+                        let allow_str = if prof.allow.is_empty() {
+                            "* (all not denied)".to_string()
+                        } else {
+                            prof.allow.join(", ")
+                        };
+                        println!("Allowed:     {}", allow_str);
+                        let deny_str = if prof.deny.is_empty() {
+                            "none".to_string()
+                        } else {
+                            prof.deny.join(", ")
+                        };
+                        println!("Denied:      {}", deny_str);
+                    }
+                    None => {
+                        eprintln!("Error: Profile '{}' not found.", name);
+                        exit(1);
+                    }
+                },
+                ToolPolicyCommands::Set {
+                    name,
+                    allow,
+                    deny,
+                    description,
+                } => {
+                    let prof = tool_policy::ToolProfile {
+                        name: name.clone(),
+                        description,
+                        allow,
+                        deny,
+                    };
+                    match tool_policy::upsert_profile(prof) {
+                        Ok(_) => println!("Tool policy profile '{}' successfully saved.", name),
+                        Err(e) => {
+                            eprintln!("Error saving profile '{}': {}", name, e);
+                            exit(1);
+                        }
+                    }
+                }
+                ToolPolicyCommands::Delete { name } => match tool_policy::delete_profile(&name) {
+                    Ok(true) => println!("Tool policy profile '{}' deleted successfully.", name),
+                    Ok(false) => {
+                        eprintln!("Error: Profile '{}' does not exist.", name);
+                        exit(1);
+                    }
+                    Err(e) => {
+                        eprintln!("Error deleting profile '{}': {}", name, e);
+                        exit(1);
+                    }
+                },
+            }
+        }
 
         Commands::Ui => {
             if let Err(e) = tui::run_tui() {

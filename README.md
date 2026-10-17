@@ -1,7 +1,7 @@
 # 🛡️ MCP Sentinel
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-68%2F68%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-76%2F76%20passing-brightgreen.svg)](tests/)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 [![Security](https://img.shields.io/badge/security-Zero--Trust%20%7C%20HMAC--SHA256-orange.svg)](#security-guarantees)
 
@@ -10,7 +10,8 @@ for [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers.
 
 It prevents API keys, database credentials, and personal access tokens from being stored in plaintext configuration
 files (`claude_desktop_config.json`, `mcp.json`), blocks malicious MCP servers from exfiltrating host environment
-variables, enforces an interactive **Trust-On-First-Use (TOFU)** authorization model, and actively masks injected
+variables, enforces an interactive **Trust-On-First-Use (TOFU)** authorization model, inspects and controls tool calls
+with an in-stream **Layer 7 Tool Firewall (Whitelist/Blacklist & Reusable Profiles)**, and actively masks injected
 secrets on `stdout` with **Data Loss Prevention (DLP)** streaming filters.
 
 ---
@@ -81,6 +82,8 @@ server:
   |  [5] Injects ONLY explicitly authorized secrets                |
   |  [6] Attaches to OS Job Object (guarantees orphan cleanup)     |
   |  [7] Stream DLP: Real-time secret masking on child stdout      |
+  |  [8] L7 Tool Firewall: Intercepts tools/call on stdin          |
+  |      (drops blocked calls with -32001 before child execution)  |
   +------------------------------+---------------------------------+
                                  | (Sanitized Stdio Stream)
                                  v
@@ -96,6 +99,7 @@ server:
 | **Host Environment**              | 100% exposed to child process | Stripped clean (Default-Deny Whitelist)           |
 | **User Authorization**            | Silent automatic execution    | Native OS Pop-up Dialog (TOFU)                    |
 | **Policy Integrity**              | None (editable by any script) | HMAC-SHA256 cryptographic signature               |
+| **Tool Call Firewall (L7)**       | Unrestricted tool execution   | In-stream JSON-RPC inspection & Profile Filtering |
 | **Data Loss Prevention (DLP)**    | Secrets echoed to stdout leak | Byte-level streaming masking across chunk borders |
 | **Orphan Process Cleanup**        | Zombie processes linger       | Automatic tree termination (Job Object / Signals) |
 | **Protocol Overhead**             | Baseline                      | **Zero perceptible latency** (~26,000 msgs/sec)   |
@@ -274,6 +278,9 @@ mcp-sentinel run [OPTIONS] -- <COMMAND> [ARGS]...
   - **Aliased secret**: `TARGET_ENV=VAULT_KEY` (e.g., `API_KEY=OPENAI_PROD_KEY` retrieves `OPENAI_PROD_KEY` from vault and injects into child environment as `API_KEY`).
   - Allows multiple MCP servers using identical generic environment variable names (such as `API_KEY` or `DATABASE_URL`) to map cleanly to distinct secrets stored in your vault.
 - `--allow-once` (alias `--once`): Authorize this execution once without persisting permission to `permissions.json`.
+- `--profile <NAME>`: Apply a pre-configured or custom tool policy profile (e.g., `read-only`, `no-destructive`).
+- `--allow-tools <PATS>`: Comma-separated allowed tool patterns with wildcard support (e.g., `read_*,get_*,list_*`).
+- `--deny-tools <PATS>`: Comma-separated denied tool patterns with wildcard support (e.g., `*drop*,*delete*,*destroy*`). Strictly overrides allow patterns.
 - `--no-redact`: Disable automatic Data Loss Prevention (DLP) secret masking on stdout. By default, Sentinel transparently redacts any authorized secrets echoed by the child process into `[REDACTED_BY_SENTINEL]`.
 - `--name <NAME>`: Friendly display name shown in authorization prompts.
 - `-- <COMMAND>`: Command and arguments of the target MCP server.
@@ -309,6 +316,30 @@ mcp-sentinel permissions revoke <FINGERPRINT_HEX>
 
 # Reset and purge all stored permissions
 mcp-sentinel permissions reset
+```
+
+### `mcp-sentinel profile` (alias: `profiles`, `tool-policy`)
+
+Manage reusable Layer 7 Tool Policy Profiles for granular tool call whitelisting and blacklisting. Profiles are cryptographically signed with HMAC-SHA256 to prevent local tampering.
+
+```bash
+# List all configured profiles (includes built-in presets: read-only, no-destructive)
+mcp-sentinel profile list
+
+# View detailed specifications of a profile
+mcp-sentinel profile get <NAME>
+
+# Create or update a reusable profile
+mcp-sentinel profile set <NAME> --allow <PATTERNS> --deny <PATTERNS> [--description <DESC>]
+
+# Example: Create an analytics-only policy
+mcp-sentinel profile set db-analyst \
+  --allow "get_*,select_*,query_*,explain_*" \
+  --deny "*drop*,*delete*,*truncate*,*alter*,*update*,*insert*" \
+  --description "Read-only database analytics queries"
+
+# Delete a custom profile (built-in presets are protected)
+mcp-sentinel profile delete <NAME>
 ```
 
 ### `mcp-sentinel migrate`
@@ -347,12 +378,12 @@ mcp-sentinel ui
   * `[Enter]`: Select menu item, reveal secret, or trigger action
   * `[→]` / `[Tab]`: Enter content view from sidebar
   * `[←]` / `[Esc]`: Return focus to sidebar menu
-  * `[1]` / `[2]` / `[3]`: Quick jump to Secrets Vault, Permissions, or System Status
+  * `[1]` / `[2]` / `[3]` / `[4]`: Quick jump to Secrets Vault, Permissions, Tool Policies, or System Status
   * `[a]`: Add new secret to OS Keyring
   * `[v]`: Reveal selected secret value in modal dialog
   * `[e]`: Edit / update selected secret value
-  * `[d]` / `[Delete]`: Delete secret or revoke permission
-  * `[r]`: Reload from OS Vault
+  * `[d]` / `[Delete]`: Delete secret, revoke permission, or delete custom tool profile
+  * `[r]`: Reload from OS Vault, permissions, and tool profiles
   * `[x]`: Reset all permissions
   * `[q]`: Quit dashboard
 
@@ -376,10 +407,11 @@ mcp-sentinel ui
 5. **Real-Time Data Loss Prevention (DLP)**: Stream redactor powered by `aho-corasick` scans the child's `stdout` pipeline on the fly. Any injected secret value (≥ 5 characters) echoed back by rogue tools, error logs, or LLM output is masked with `[REDACTED_BY_SENTINEL]` before reaching the host IDE, cleanly handling split secrets across 8KB streaming chunk boundaries.
 6. **UI Spoofing Defense**: The native authorization dialog collapses newlines and limits text lengths to prevent line-breaking and visual truncation attacks.
 7. **Hardware-Backed CSPRNG**: The master signing key is generated via native OS entropy (`rand::rngs::OsRng`), ensuring cryptographic unpredictability.
-8. **Verified by 68 Automated Tests across 5 Suites**:
-   - **Unit Tests (36 tests)**: Vault operations, alias mapping & validation, fingerprint collision resistance, HMAC signing & tamper rejection, environment sanitizer whitelist, dialog text sanitization, interactive TUI input field navigation, stream-boundary DLP redaction, and Allow Once mock decisions.
+8. **Layer 7 JSON-RPC Tool Firewall**: Intercepts `tools/call` requests on child process `stdin`. If an LLM or user attempts to call a tool blocked by the active profile or `--deny-tools` pattern, `mcp-sentinel` synthesizes a JSON-RPC `-32001` error response back to the host IDE, alerts `stderr`, and completely drops the request from reaching the child process.
+9. **Verified by 76 Automated Tests across 5 Suites**:
+   - **Unit Tests (43 tests)**: Vault operations, alias mapping & validation, fingerprint collision resistance, HMAC signing & tamper rejection for policies and tool profiles, wildcard pattern evaluation, environment sanitizer whitelist, dialog text sanitization, interactive TUI navigation and state management, stream-boundary DLP redaction, and Allow Once ephemeral grants.
    - **Integration Tests (8 tests)**: Subprocess execution, CLI parsing, exit code propagation, secret list, permissions list, TUI launch commands, and full migration workflow.
-   - **Security Penetration Tests (14 tests)**: Host environment variable exfiltration blocked, command injection (`;&|`) neutralized, forged permission injection rejected, argument smuggling intercepted, child process sandbox recursion blocked, reserved key name rejection, alias tamper resistance, stdout DLP secret masking, and Allow Once non-persistence.
+   - **Security Penetration Tests (15 tests)**: Host environment variable exfiltration blocked, command injection (`;&|`) neutralized, forged permission injection rejected, argument smuggling intercepted, child process sandbox recursion blocked, reserved key name rejection, alias tamper resistance, stdout DLP secret masking, Allow Once non-persistence, and Layer 7 tool call firewall drop & error synthesis.
    - **Stress Tests (6 tests)**: 100-secret bulk injection, corrupted policy resilience, Unicode & Vietnamese character preservation, stdio separation.
    - **Performance Benchmarks (4 tests)**: High-load async stdio streaming (~26,000 JSON-RPC msgs/sec), multithreaded SHA-256 hashing (~320,000 ops/sec).
 

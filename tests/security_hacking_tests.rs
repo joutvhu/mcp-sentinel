@@ -601,3 +601,84 @@ fn hack_test_allow_once_does_not_persist_grant() {
 
     let _ = mcp_sentinel::vault::delete_secret(vault_key);
 }
+
+/// HACK ATTACK 15: Layer 7 Tool Call Firewall (Blocked Destructive Tool Interception)
+/// An attacker or autonomous AI model attempts to invoke a destructive MCP tool ('drop_database').
+/// When protected by the 'read-only' profile, mcp-sentinel must intercept the JSON-RPC request,
+/// return error -32001 to host stdout, and NEVER deliver the call to the child process.
+#[test]
+fn hack_test_layer7_tool_firewall_blocks_destructive_call() {
+    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+
+    // A mock MCP server script that echoes incoming requests
+    let server_script = r#"
+        const readline = require('readline');
+        const rl = readline.createInterface({ input: process.stdin });
+        rl.on('line', (line) => {
+            const req = JSON.parse(line);
+            console.log(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: { executed: req.params.name } }));
+        });
+    "#;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args([
+            "run",
+            "--profile",
+            "read-only",
+            "--",
+            "node",
+            "-e",
+            server_script,
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn mcp-sentinel with tool policy profile");
+
+    {
+        use std::io::Write;
+        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+
+        // 1. Send allowed call: "read_users"
+        stdin
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"read_users\"}}\n")
+            .unwrap();
+
+        // 2. Send blocked call: "drop_database"
+        stdin
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"drop_database\"}}\n")
+            .unwrap();
+    }
+
+    let output = child.wait_with_output().expect("Failed to read output");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // 1. read_users must have been executed by child
+    assert!(
+        stdout.contains("\"executed\":\"read_users\""),
+        "Allowed tool call must be forwarded and executed! Stdout: {}",
+        stdout
+    );
+
+    // 2. drop_database must have been intercepted with code -32001
+    assert!(
+        stdout.contains("\"code\":-32001") && stdout.contains("blocked by security policy"),
+        "Blocked tool call must receive JSON-RPC error -32001! Stdout: {}",
+        stdout
+    );
+
+    // 3. Child must NEVER have executed drop_database
+    assert!(
+        !stdout.contains("\"executed\":\"drop_database\""),
+        "Blocked tool call must NEVER reach child process!"
+    );
+
+    // 4. Stderr must log security alert
+    assert!(
+        stderr.contains("Security Alert: Blocked unauthorized tool call 'drop_database'"),
+        "Security alert must be logged to stderr! Stderr: {}",
+        stderr
+    );
+}

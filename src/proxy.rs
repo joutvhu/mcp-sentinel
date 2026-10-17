@@ -6,6 +6,7 @@ pub async fn run_child_and_pipe(
     cmd_args: &[String],
     env_vars: HashMap<String, String>,
     redact_secrets: Vec<String>,
+    tool_profile: Option<crate::tool_policy::ToolProfile>,
 ) -> Result<i32, Box<dyn std::error::Error>> {
     if cmd_args.is_empty() {
         return Err("No command specified to execute".into());
@@ -57,7 +58,66 @@ pub async fn run_child_and_pipe(
 
     // Spawn async background tasks for stdin, stdout, stderr forwarding
     let in_task = tokio::spawn(async move {
-        let _ = tokio::io::copy(&mut host_stdin, &mut child_stdin).await;
+        if let Some(profile) = tool_profile {
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+            let mut reader = BufReader::new(host_stdin).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                let trimmed = line.trim();
+                let mut is_blocked = false;
+
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    if val.get("method").and_then(|m| m.as_str()) == Some("tools/call") {
+                        if let Some(tool_name) = val
+                            .get("params")
+                            .and_then(|p| p.get("name"))
+                            .and_then(|n| n.as_str())
+                        {
+                            let decision =
+                                crate::tool_policy::evaluate_tool_call(tool_name, &profile);
+                            if let crate::tool_policy::ToolDecision::Blocked { reason } = decision {
+                                is_blocked = true;
+                                eprintln!(
+                                    "[mcp-sentinel] Security Alert: Blocked unauthorized tool call '{}' by policy '{}': {}",
+                                    tool_name, profile.name, reason
+                                );
+
+                                let id = val.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                                let err_resp = serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "id": id,
+                                    "error": {
+                                        "code": -32001,
+                                        "message": format!(
+                                            "[MCP-SENTINEL] Tool '{}' is blocked by security policy '{}': {}",
+                                            tool_name, profile.name, reason
+                                        )
+                                    }
+                                });
+
+                                let mut err_bytes = err_resp.to_string();
+                                err_bytes.push('\n');
+                                let mut stdout = tokio::io::stdout();
+                                let _ = stdout.write_all(err_bytes.as_bytes()).await;
+                                let _ = stdout.flush().await;
+                            }
+                        }
+                    }
+                }
+
+                if !is_blocked {
+                    let mut payload = line;
+                    payload.push('\n');
+                    if child_stdin.write_all(payload.as_bytes()).await.is_err() {
+                        break;
+                    }
+                    if child_stdin.flush().await.is_err() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            let _ = tokio::io::copy(&mut host_stdin, &mut child_stdin).await;
+        }
     });
 
     let out_task = tokio::spawn(async move {

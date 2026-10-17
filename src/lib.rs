@@ -6,5 +6,6 @@ pub mod policy;
 pub mod proxy;
 pub mod redactor;
 pub mod sanitizer;
+pub mod tool_policy;
 pub mod tui;
 pub mod vault;
