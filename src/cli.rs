@@ -31,12 +31,14 @@ pub enum Commands {
     },
 
     /// Manage secrets stored in the OS Keyring
+    #[command(alias = "secrets")]
     Secret {
         #[command(subcommand)]
         action: SecretCommands,
     },
 
     /// Manage permissions granted to MCP servers (TOFU policy)
+    #[command(alias = "permission", alias = "perm", alias = "perms")]
     Permissions {
         #[command(subcommand)]
         action: PermCommands,
@@ -174,5 +176,20 @@ mod tests {
                 action: PermCommands::Reset
             }
         ));
+    }
+
+    #[test]
+    fn test_parse_subcommand_aliases() {
+        // "permission" singular alias
+        let cli_perm = Cli::try_parse_from(["mcp-sentinel", "permission", "list"]).unwrap();
+        assert!(matches!(cli_perm.command, Commands::Permissions { .. }));
+
+        // "perm" alias
+        let cli_p = Cli::try_parse_from(["mcp-sentinel", "perm", "list"]).unwrap();
+        assert!(matches!(cli_p.command, Commands::Permissions { .. }));
+
+        // "secrets" plural alias
+        let cli_sec = Cli::try_parse_from(["mcp-sentinel", "secrets", "list"]).unwrap();
+        assert!(matches!(cli_sec.command, Commands::Secret { .. }));
     }
 }

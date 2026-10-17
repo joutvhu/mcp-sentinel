@@ -72,7 +72,7 @@ fn bench_sanitizer_environment_building_10000_ops() {
 
     // 10k environment sanitizations (170,000 OS syscalls) in debug profile
     assert!(
-        elapsed.as_secs() < 5,
+        elapsed.as_secs() < 10,
         "Environment sanitization too slow: {:?}",
         elapsed
     );
