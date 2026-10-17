@@ -1153,7 +1153,7 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
             value,
             focus_value,
         } => {
-            let popup_area = centered_rect(60, 42, area);
+            let popup_area = centered_rect_exact(68, 14, area);
             f.render_widget(Clear, popup_area);
 
             let block = Block::default()
@@ -1173,8 +1173,10 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 .constraints([
                     Constraint::Length(1), // Hint
                     Constraint::Length(3), // Key Input
+                    Constraint::Length(1), // Spacer
                     Constraint::Length(3), // Value Input
-                    Constraint::Min(2),    // Actions
+                    Constraint::Length(1), // Spacer
+                    Constraint::Length(1), // Actions
                 ])
                 .split(inner_area);
 
@@ -1193,9 +1195,12 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 .border_type(BorderType::Rounded)
                 .title(" Key Name ")
                 .style(key_style);
-            let p_key = Paragraph::new(key.as_str())
-                .block(key_block)
-                .style(modal_bg);
+            let display_key = if !*focus_value {
+                format!("{}_", key)
+            } else {
+                key.clone()
+            };
+            let p_key = Paragraph::new(display_key).block(key_block).style(modal_bg);
             f.render_widget(p_key, chunks[1]);
 
             let val_style = if *focus_value {
@@ -1208,10 +1213,13 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 .border_type(BorderType::Rounded)
                 .title(" Secret Value ")
                 .style(val_style);
-            let p_val = Paragraph::new(value.as_str())
-                .block(val_block)
-                .style(modal_bg);
-            f.render_widget(p_val, chunks[2]);
+            let display_val = if *focus_value {
+                format!("{}_", value)
+            } else {
+                value.clone()
+            };
+            let p_val = Paragraph::new(display_val).block(val_block).style(modal_bg);
+            f.render_widget(p_val, chunks[3]);
 
             let actions = Paragraph::new(vec![Line::from(vec![
                 Span::styled("[Tab] ", Style::default().fg(Color::Cyan).bold()),
@@ -1222,11 +1230,11 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::raw("Cancel"),
             ])])
             .style(modal_bg);
-            f.render_widget(actions, chunks[3]);
+            f.render_widget(actions, chunks[5]);
         }
 
         ModalState::ConfirmDeleteSecret(name) => {
-            let popup_area = centered_rect(50, 24, area);
+            let popup_area = centered_rect_exact(54, 8, area);
             f.render_widget(Clear, popup_area);
 
             let block = Block::default()
@@ -1263,7 +1271,7 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
         }
 
         ModalState::ConfirmRevokeGrant(id) => {
-            let popup_area = centered_rect(50, 26, area);
+            let popup_area = centered_rect_exact(62, 9, area);
             f.render_widget(Clear, popup_area);
 
             let block = Block::default()
@@ -1304,7 +1312,7 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
         }
 
         ModalState::ConfirmResetGrants => {
-            let popup_area = centered_rect(55, 26, area);
+            let popup_area = centered_rect_exact(62, 9, area);
             f.render_widget(Clear, popup_area);
 
             let block = Block::default()
@@ -1341,7 +1349,7 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
         }
 
         ModalState::RevealSecret { key, value } => {
-            let popup_area = centered_rect(58, 28, area);
+            let popup_area = centered_rect_exact(62, 10, area);
             f.render_widget(Clear, popup_area);
 
             let block = Block::default()
@@ -1382,22 +1390,17 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
+fn centered_rect_exact(width: u16, height: u16, r: Rect) -> Rect {
+    let actual_width = width.min(r.width.saturating_sub(4));
+    let actual_height = height.min(r.height.saturating_sub(2));
 
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
+    let x = r.x + (r.width.saturating_sub(actual_width)) / 2;
+    let y = r.y + (r.height.saturating_sub(actual_height)) / 2;
+
+    Rect {
+        x,
+        y,
+        width: actual_width,
+        height: actual_height,
+    }
 }
