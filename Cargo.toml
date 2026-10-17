@@ -1,0 +1,60 @@
+[package]
+name = "mcp-sentinel"
+version = "0.1.0"
+edition = "2021"
+authors = ["Giáo Hồ"]
+description = "Zero-Trust Secret Vault & Security Proxy for Model Context Protocol (MCP)"
+license = "Apache-2.0"
+repository = "https://github.com/joutvhu/mcp-sentinel"
+homepage = "https://github.com/joutvhu/mcp-sentinel"
+readme = "README.md"
+keywords = ["mcp", "security", "vault", "keyring", "proxy"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+# CLI Parsing
+clap = { version = "4.5", features = ["derive", "cargo"] }
+
+# Asynchronous Runtime & Subprocess Streaming
+tokio = { version = "1.38", features = ["full"] }
+
+# Native Dialog
+rfd = "0.15"
+
+# Executable discovery (handles .cmd, .bat, PATHEXT on Windows)
+which = "6.0"
+
+# Fingerprint & Integrity Signing
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+
+# JSON & Time
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Logging (stderr only)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Standard directories
+directories = "5.0"
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3.0", features = ["windows-native"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_Security",
+    "Win32_Foundation"
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.0", features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.0", features = ["sync-secret-service"] }
+
+[target.'cfg(unix)'.dependencies]
+tokio-util = "0.7"
