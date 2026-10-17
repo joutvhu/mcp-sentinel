@@ -112,7 +112,8 @@ mod tests {
     #[test]
     fn test_parse_secret_commands() {
         // Set
-        let cli = Cli::try_parse_from(["mcp-sentinel", "secrets", "set", "MY_KEY", "MY_VAL"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["mcp-sentinel", "secrets", "set", "MY_KEY", "MY_VAL"]).unwrap();
         match cli.command {
             Commands::Secrets {
                 action: SecretCommands::Set { key, value },
@@ -158,7 +159,8 @@ mod tests {
         ));
 
         // Revoke
-        let cli = Cli::try_parse_from(["mcp-sentinel", "permissions", "revoke", "fp_12345"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["mcp-sentinel", "permissions", "revoke", "fp_12345"]).unwrap();
         match cli.command {
             Commands::Permissions {
                 action: PermCommands::Revoke { id },

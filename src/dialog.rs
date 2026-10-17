@@ -10,7 +10,13 @@ const DIALOG_TIMEOUT_SECS: u64 = 60;
 pub fn sanitize_dialog_text(text: &str, max_len: usize) -> String {
     let cleaned: String = text
         .chars()
-        .map(|c| if c.is_control() || c == '\n' || c == '\r' { ' ' } else { c })
+        .map(|c| {
+            if c.is_control() || c == '\n' || c == '\r' {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect();
 
     let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");

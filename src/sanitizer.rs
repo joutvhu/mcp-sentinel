@@ -37,9 +37,13 @@ pub fn build_sanitized_env(secrets_to_inject: &HashMap<String, String>) -> HashM
     let mut clean_env = HashMap::new();
 
     let current_exe_dir_str = CURRENT_EXE_DIR.get_or_init(|| {
-        env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase()))
+        env::current_exe().ok().and_then(|p| {
+            p.parent().map(|d| {
+                d.to_string_lossy()
+                    .trim_end_matches(['\\', '/'])
+                    .to_lowercase()
+            })
+        })
     });
 
     for &key in SAFE_KEYS {
@@ -48,7 +52,10 @@ pub fn build_sanitized_env(secrets_to_inject: &HashMap<String, String>) -> HashM
                 if let Some(ref exe_dir_str) = current_exe_dir_str {
                     let filtered_paths: Vec<_> = env::split_paths(&val)
                         .filter(|p| {
-                            let p_str = p.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
+                            let p_str = p
+                                .to_string_lossy()
+                                .trim_end_matches(['\\', '/'])
+                                .to_lowercase();
                             p_str != *exe_dir_str
                         })
                         .collect();

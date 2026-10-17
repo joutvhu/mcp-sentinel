@@ -152,8 +152,8 @@ cargo install --force mcp-sentinel    # Cargo
 Save your secret securely into your operating system's native credential store:
 
 ```bash
-mcp-sentinel secret set GITHUB_TOKEN ghp_xxxxxxxxxxxxxxxxxxxx
-mcp-sentinel secret set POSTGRES_PASSWORD mySuperSecretPassword123
+mcp-sentinel secrets set GITHUB_TOKEN ghp_xxxxxxxxxxxxxxxxxxxx
+mcp-sentinel secrets set POSTGRES_PASSWORD mySuperSecretPassword123
 ```
 
 ### Step 2: Configure your AI Application
@@ -257,31 +257,30 @@ Proxy an MCP server with environment isolation and secret injection.
 mcp-sentinel run [OPTIONS] -- <COMMAND> [ARGS]...
 ```
 
-- `--secrets <KEY1,KEY2,...>`: Comma-separated or repeated list of secrets to retrieve from OS Vault and inject into
+- `--secrets <KEY1,KEY2,...>`: Comma-separated list of secrets to retrieve from OS Vault and inject into
   child process.
 - `--name <NAME>`: Friendly display name shown in authorization prompts.
-- `--timeout <SECS>`: Consent dialog timeout in seconds (default: 60s to prevent AI host deadlock).
 - `-- <COMMAND>`: Command and arguments of the target MCP server.
 
-### `mcp-sentinel secret`
+### `mcp-sentinel secrets` (alias: `secret`)
 
 Manage secrets stored in native OS Credential Vault.
 
 ```bash
 # Store or update a secret
-mcp-sentinel secret set <KEY> [VALUE]
+mcp-sentinel secrets set <KEY> <VALUE>
 
 # Retrieve a secret value
-mcp-sentinel secret get <KEY>
+mcp-sentinel secrets get <KEY>
 
 # Delete a secret
-mcp-sentinel secret delete <KEY>
+mcp-sentinel secrets delete <KEY>
 
 # List all stored secret keys
-mcp-sentinel secret list
+mcp-sentinel secrets list
 ```
 
-### `mcp-sentinel permissions`
+### `mcp-sentinel permissions` (alias: `permission`, `perm`)
 
 Inspect and audit Trust-On-First-Use grants.
 
@@ -312,12 +311,15 @@ mcp-sentinel permissions reset
 3. **Strict Stderr Isolation**: The JSON-RPC protocol mandates clean standard streams. `mcp-sentinel` writes 100% of
    proxy logs, diagnostics, and notifications exclusively to `stderr`, guaranteeing zero protocol corruption on
    `stdout`.
-4. **Verified by 30 Automated Test Suites**:
-   - **Unit Tests (11 tests)**: Vault operations, fingerprint collision resistance, HMAC signing & tamper rejection,
-     environment sanitizer whitelist.
-   - **Integration Tests (4 tests)**: Subprocess execution, CLI parsing, exit code propagation.
-   - **Security Penetration Tests (5 tests)**: Host environment variable exfiltration blocked, command injection
-     (`;&|`) neutralized, forged permission injection rejected, argument smuggling intercepted.
+4. **Child Process Anti-Recursion Lock**: Child processes running inside the MCP sandbox cannot access secrets or recursively invoke `mcp-sentinel`. The current executable path is also stripped from `PATH`.
+5. **UI Spoofing Defense**: The native authorization dialog collapses newlines and limits text lengths to prevent line-breaking and visual truncation attacks.
+6. **Hardware-Backed CSPRNG**: The master signing key is generated via native OS entropy (`rand::rngs::OsRng`), ensuring cryptographic unpredictability.
+7. **Verified by 38 Automated Test Suites**:
+   - **Unit Tests (16 tests)**: Vault operations, fingerprint collision resistance, HMAC signing & tamper rejection,
+     environment sanitizer whitelist, dialog text sanitization, key name validation rules.
+   - **Integration Tests (5 tests)**: Subprocess execution, CLI parsing, exit code propagation, secret list & alias commands.
+   - **Security Penetration Tests (7 tests)**: Host environment variable exfiltration blocked, command injection
+     (`;&|`) neutralized, forged permission injection rejected, argument smuggling intercepted, child process sandbox recursion blocked, reserved key name rejection.
    - **Stress Tests (6 tests)**: 100-secret bulk injection, corrupted policy resilience, Unicode & Vietnamese character
      preservation.
    - **Performance Benchmarks (4 tests)**: High-load async stdio streaming (~26,000 JSON-RPC msgs/sec), multithreaded
