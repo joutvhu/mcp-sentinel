@@ -112,6 +112,7 @@ jobs:
     name: Bump Homebrew Tap Formula
     needs: build-release
     runs-on: ubuntu-latest
+    continue-on-error: true
     env:
       TAP_TOKEN: ${{ secrets.GH_PAT || secrets.GH_PUBLISH_TOKEN || secrets.HOMEBREW_TAP_TOKEN }}
     steps:
@@ -132,6 +133,7 @@ jobs:
     name: Submit to Windows WinGet
     needs: build-release
     runs-on: windows-latest
+    continue-on-error: true
     env:
       WG_TOKEN: ${{ secrets.GH_PAT || secrets.GH_PUBLISH_TOKEN || secrets.WINGET_TOKEN }}
     steps:
