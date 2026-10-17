@@ -67,7 +67,8 @@ pub fn ask_user_permission(command_name: &str, secrets: &[String]) -> AuthDecisi
         || std::env::var("MCP_SENTINEL_TEST_MODE").is_ok()
     {
         eprintln!(
-            "[mcp-sentinel] Non-interactive / CI environment detected. Cannot display interactive consent dialog. Denying access."
+            "[mcp-sentinel] Non-interactive / CI environment detected. Cannot display interactive consent dialog. Denying access.\n\
+             Tip: Pre-authorize on headless/CI using: mcp-sentinel permissions grant [--name <NAME>] --secrets <SECRETS> -- <COMMAND>"
         );
         return AuthDecision::Deny;
     }

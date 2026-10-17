@@ -171,21 +171,29 @@ pub fn find_config_paths(target: MigrateTarget) -> Vec<PathBuf> {
     paths
 }
 
-/// Sanitizes an arbitrary string into a valid environment variable name.
+/// Sanitizes an arbitrary string into a valid environment variable name,
+/// preserving case-sensitivity and ensuring it begins with an ASCII letter or underscore.
 fn sanitize_for_env_key(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_uppercase()
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
             } else {
                 '_'
             }
         })
         .collect();
+
     let trimmed = cleaned.trim_matches('_');
     if trimmed.is_empty() {
-        "SECRET".to_string()
+        return "SECRET".to_string();
+    }
+
+    // Ensure the key starts with an ASCII letter or underscore (for vault validation)
+    let first = trimmed.chars().next().unwrap();
+    if !first.is_ascii_alphabetic() && first != '_' {
+        format!("_{}", trimmed)
     } else {
         trimmed.to_string()
     }
@@ -441,8 +449,10 @@ mod tests {
 
     #[test]
     fn test_sanitize_for_env_key() {
-        assert_eq!(sanitize_for_env_key("my-api-key"), "MY_API_KEY");
-        assert_eq!(sanitize_for_env_key("token@service"), "TOKEN_SERVICE");
+        assert_eq!(sanitize_for_env_key("my-api-key"), "my_api_key");
+        assert_eq!(sanitize_for_env_key("token@service"), "token_service");
+        assert_eq!(sanitize_for_env_key("apiKey"), "apiKey");
+        assert_eq!(sanitize_for_env_key("1PASSWORD_KEY"), "_1PASSWORD_KEY");
         assert_eq!(sanitize_for_env_key("___"), "SECRET");
     }
 

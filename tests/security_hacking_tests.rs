@@ -814,3 +814,187 @@ fn hack_test_audit_logging_default_off_and_safe_capture() {
     let _ = mcp_sentinel::vault::delete_secret(vault_key);
     let _ = std::fs::remove_dir_all(&config_dir);
 }
+
+/// HACK ATTACK 17: Layer 7 Tool Call Firewall Batch Request Interception
+/// Attackers or rogue models can pack multiple JSON-RPC calls into an array batch request.
+/// The L7 firewall must unpack the batch, block unauthorized destructive calls,
+/// return JSON-RPC errors for blocked items, and only forward permitted calls to the child.
+#[test]
+fn hack_test_layer7_tool_firewall_blocks_batch_requests() {
+    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+
+    let server_script = r#"
+        const readline = require('readline');
+        const rl = readline.createInterface({ input: process.stdin });
+        rl.on('line', (line) => {
+            const parsed = JSON.parse(line);
+            if (Array.isArray(parsed)) {
+                const resp = parsed.map(req => ({ jsonrpc: '2.0', id: req.id, result: { executed: req.params.name } }));
+                console.log(JSON.stringify(resp));
+            } else {
+                console.log(JSON.stringify({ jsonrpc: '2.0', id: parsed.id, result: { executed: parsed.params.name } }));
+            }
+        });
+    "#;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args([
+            "run",
+            "--profile",
+            "read-only",
+            "--",
+            "node",
+            "-e",
+            server_script,
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn mcp-sentinel with read-only profile");
+
+    {
+        use std::io::Write;
+        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+
+        // Send a mixed batch: id: 1 is allowed ('read_data'), id: 2 is blocked ('drop_database')
+        let batch_payload = serde_json::json!([
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": { "name": "read_data" }
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": { "name": "drop_database" }
+            }
+        ]);
+
+        let payload_str = format!("{}\n", batch_payload);
+        stdin.write_all(payload_str.as_bytes()).unwrap();
+
+        // Also send a batch where ALL are blocked: id: 3 ('rmdir'), id: 4 ('truncate')
+        let all_blocked_batch = serde_json::json!([
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": { "name": "rmdir" }
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": { "name": "truncate" }
+            }
+        ]);
+        let all_blocked_str = format!("{}\n", all_blocked_batch);
+        stdin.write_all(all_blocked_str.as_bytes()).unwrap();
+    }
+
+    let output = child.wait_with_output().expect("Failed to read output");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // 1. Mixed batch: read_data must succeed and be executed
+    assert!(
+        stdout.contains("\"executed\":\"read_data\""),
+        "Permitted tool in batch must be executed by child! Stdout: {}",
+        stdout
+    );
+
+    // 2. Mixed batch: drop_database must be intercepted with code -32001
+    assert!(
+        stdout.contains("\"code\":-32001") && stdout.contains("drop_database"),
+        "Blocked tool in batch must receive code -32001 error! Stdout: {}",
+        stdout
+    );
+
+    // 3. Destructive tool drop_database must NEVER have been executed by child
+    assert!(
+        !stdout.contains("\"executed\":\"drop_database\""),
+        "Destructive tool in batch must NEVER reach child process!"
+    );
+
+    // 4. All-blocked batch: id 3 and 4 must both receive error -32001
+    assert!(
+        stdout.contains("\"id\":3") && stdout.contains("\"id\":4"),
+        "All blocked items in batch must receive errors! Stdout: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("\"executed\":\"rmdir\"") && !stdout.contains("\"executed\":\"truncate\""),
+        "Child must never execute any call from all-blocked batch!"
+    );
+}
+
+/// HACK ATTACK 18: Headless / SSH Pre-authorization via CLI
+/// On headless servers or CI/CD pipelines without GUI or interactive terminal,
+/// administrators must be able to securely pre-authorize servers via `permissions grant`.
+#[test]
+fn hack_test_permissions_grant_headless_preauth() {
+    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let vault_key = "TEST_VAULT_HEADLESS_KEY";
+    let _ = mcp_sentinel::vault::set_secret(vault_key, "secret_value_123");
+
+    let script = "console.log('HEADLESS_AUTH_SUCCESS');";
+    let cmd = vec!["node".to_string(), "-e".to_string(), script.to_string()];
+    let fp = compute_fingerprint(&cmd);
+    let spec = format!("MY_KEY={}", vault_key);
+
+    // Pre-condition: revoke any previous grant and assert not authorized
+    let _ = mcp_sentinel::policy::revoke_grant(&fp);
+    assert!(!mcp_sentinel::policy::is_authorized(
+        &fp,
+        std::slice::from_ref(&spec)
+    ));
+
+    // Execute CLI command: permissions grant
+    let grant_output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args([
+            "permissions",
+            "grant",
+            "--name",
+            "Headless Test Server",
+            "--secrets",
+            &spec,
+            "--",
+            "node",
+            "-e",
+            script,
+        ])
+        .output()
+        .expect("Failed to execute permissions grant");
+
+    assert!(
+        grant_output.status.success(),
+        "permissions grant must succeed with exit code 0! Stderr: {}",
+        String::from_utf8_lossy(&grant_output.stderr)
+    );
+
+    // Verify policy now marks fingerprint as authorized
+    assert!(
+        mcp_sentinel::policy::is_authorized(&fp, std::slice::from_ref(&spec)),
+        "Server must be authorized in policy after permissions grant!"
+    );
+
+    // Run in non-interactive mode: must succeed immediately without prompt
+    let run_output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_NON_INTERACTIVE", "1")
+        .args(["run", "--secrets", &spec, "--", "node", "-e", script])
+        .output()
+        .expect("Failed to execute mcp-sentinel run");
+
+    assert!(run_output.status.success());
+    let stdout = String::from_utf8_lossy(&run_output.stdout);
+    assert!(
+        stdout.contains("HEADLESS_AUTH_SUCCESS"),
+        "Pre-authorized server must run cleanly in non-interactive mode! Stdout: {}",
+        stdout
+    );
+
+    let _ = mcp_sentinel::policy::revoke_grant(&fp);
+    let _ = mcp_sentinel::vault::delete_secret(vault_key);
+}

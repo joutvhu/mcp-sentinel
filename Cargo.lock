@@ -1208,6 +1208,7 @@ dependencies = [
  "hex",
  "hmac",
  "keyring",
+ "libc",
  "rand 0.8.8",
  "ratatui",
  "rfd",

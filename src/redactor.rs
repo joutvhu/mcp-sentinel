@@ -4,8 +4,26 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 pub const REDACTED_MARKER: &[u8] = b"[REDACTED_BY_SENTINEL]";
 
 /// Minimum character length for a secret to be eligible for DLP masking.
-/// Prevents short, common values (e.g., "true", "db", "ok") from corrupting JSON payloads.
-pub const MIN_SECRET_LEN: usize = 5;
+/// Prevents short, common values from corrupting payloads.
+pub const MIN_SECRET_LEN: usize = 6;
+
+/// Common boolean and generic configuration words that must never be treated as DLP targets
+pub const COMMON_NON_SECRETS: &[&str] = &[
+    "false",
+    "true",
+    "null",
+    "undefined",
+    "production",
+    "development",
+    "staging",
+    "test",
+    "testing",
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "default",
+    "none",
+];
 
 pub struct StreamRedactor {
     ac: Option<AhoCorasick>,
@@ -18,8 +36,12 @@ impl StreamRedactor {
     pub fn new(secrets: &[String]) -> Self {
         let valid_secrets: Vec<Vec<u8>> = secrets
             .iter()
+            .filter(|s| {
+                let trimmed = s.trim();
+                trimmed.len() >= MIN_SECRET_LEN
+                    && !COMMON_NON_SECRETS.contains(&trimmed.to_lowercase().as_str())
+            })
             .map(|s| s.as_bytes().to_vec())
-            .filter(|b| b.len() >= MIN_SECRET_LEN)
             .collect();
 
         if valid_secrets.is_empty() {
@@ -169,6 +191,26 @@ mod tests {
         let input = b"This is abc and foo and 1234";
         let output = redactor.redact_bytes(input);
         assert_eq!(output, input);
+    }
+
+    #[test]
+    fn test_redactor_ignores_common_non_secrets() {
+        let secrets = vec![
+            "false".to_string(),
+            "true".to_string(),
+            "production".to_string(),
+            "ghp_actual_real_secret_token_12345".to_string(),
+        ];
+        let redactor = StreamRedactor::new(&secrets);
+        assert!(redactor.is_active());
+
+        let input = br#"{"success": true, "failed": false, "env": "production", "token": "ghp_actual_real_secret_token_12345"}"#;
+        let output = redactor.redact_bytes(input);
+        let output_str = String::from_utf8(output).unwrap();
+        assert_eq!(
+            output_str,
+            r#"{"success": true, "failed": false, "env": "production", "token": "[REDACTED_BY_SENTINEL]"}"#
+        );
     }
 
     #[test]

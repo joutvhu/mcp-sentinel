@@ -63,38 +63,35 @@ fn get_master_key_file_path() -> Option<PathBuf> {
 }
 
 /// Retrieves or securely generates a 256-bit signing key inside the OS Keyring,
-/// with a protected filesystem fallback for headless / CI environments.
+/// with a protected fallback for headless / CI environments without a keyring daemon.
 pub fn get_or_create_master_key() -> Result<Vec<u8>, String> {
     if let Some(key) = MASTER_KEY_CACHE.get() {
         return Ok(key.clone());
     }
 
-    // 1. Try local protected fallback file first (instant, non-blocking, cross-process deterministic)
-    if let Some(key_path) = get_master_key_file_path() {
-        if key_path.exists() {
-            if let Ok(hex_str) = fs::read_to_string(&key_path) {
-                if let Ok(bytes) = hex::decode(hex_str.trim()) {
-                    let _ = MASTER_KEY_CACHE.set(bytes.clone());
-                    return Ok(bytes);
-                }
-            }
+    // 1. Try retrieving from OS Keyring first (Primary secure hardware/OS enclave)
+    if let Ok(hex_str) = crate::vault::get_secret(MASTER_SIGNING_KEY_NAME) {
+        if let Ok(bytes) = hex::decode(&hex_str) {
+            let _ = MASTER_KEY_CACHE.set(bytes.clone());
+            return Ok(bytes);
         }
     }
 
-    // 2. Try retrieving from OS Keyring
-    if let Ok(hex_str) = crate::vault::get_secret(MASTER_SIGNING_KEY_NAME) {
-        if let Ok(bytes) = hex::decode(&hex_str) {
-            // Also mirror to local fallback file with 0600 mode for child processes
-            if let Some(key_path) = get_master_key_file_path() {
-                let _ = fs::write(&key_path, &hex_str);
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600));
+    // 2. Check if local fallback file exists (for headless/testing environments without a keyring)
+    let allow_file = std::env::var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if allow_file {
+        if let Some(key_path) = get_master_key_file_path() {
+            if key_path.exists() {
+                if let Ok(hex_str) = fs::read_to_string(&key_path) {
+                    if let Ok(bytes) = hex::decode(hex_str.trim()) {
+                        let _ = MASTER_KEY_CACHE.set(bytes.clone());
+                        return Ok(bytes);
+                    }
                 }
             }
-            let _ = MASTER_KEY_CACHE.set(bytes.clone());
-            return Ok(bytes);
         }
     }
 
@@ -107,16 +104,18 @@ pub fn get_or_create_master_key() -> Result<Vec<u8>, String> {
 
     let hex_key = hex::encode(key_bytes);
 
-    // Save to OS Keyring if available
-    let _ = crate::vault::set_secret(MASTER_SIGNING_KEY_NAME, &hex_key);
+    // Save to OS Keyring as the primary enclave
+    let keyring_saved = crate::vault::set_secret(MASTER_SIGNING_KEY_NAME, &hex_key).is_ok();
 
-    // Also persist to local protected fallback file with 0600 mode
-    if let Some(key_path) = get_master_key_file_path() {
-        let _ = fs::write(&key_path, &hex_key);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600));
+    // Only write to local file if Keyring failed (headless/container) or insecure keyfile is explicitly permitted
+    if !keyring_saved || allow_file {
+        if let Some(key_path) = get_master_key_file_path() {
+            let _ = fs::write(&key_path, &hex_key);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600));
+            }
         }
     }
 

@@ -60,9 +60,14 @@ windows-sys = { version = "0.59", features = [
     "Win32_Foundation"
 ] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.0", features = ["apple-native"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.0", features = ["sync-secret-service"] }
+
+
 

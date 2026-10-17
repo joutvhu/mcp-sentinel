@@ -133,6 +133,20 @@ pub enum SecretCommands {
 pub enum PermCommands {
     /// List all granted MCP permissions
     List,
+    /// Pre-authorize an MCP server command and secrets (ideal for headless, SSH, and CI environments)
+    Grant {
+        /// Friendly name of the MCP server
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Comma-separated list of required secrets or alias mappings
+        #[arg(short, long, value_delimiter = ',')]
+        secrets: Vec<String>,
+
+        /// Command and arguments of the MCP server to pre-authorize
+        #[arg(required = true, last = true)]
+        cmd: Vec<String>,
+    },
     /// Revoke permission for a specific MCP by fingerprint ID
     Revoke {
         /// Fingerprint ID of the MCP

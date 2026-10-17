@@ -1,7 +1,7 @@
 # 🛡️ MCP Sentinel
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-82%2F82%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-85%2F85%20passing-brightgreen.svg)](tests/)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 [![Security](https://img.shields.io/badge/security-Zero--Trust%20%7C%20HMAC--SHA256-orange.svg)](#security-guarantees)
 
@@ -339,6 +339,9 @@ Inspect and audit Trust-On-First-Use grants.
 ```bash
 # List all active authorizations and command fingerprints
 mcp-sentinel permissions list
+
+# Pre-authorize an MCP server command without interactive prompts (ideal for headless servers, SSH, or CI/CD)
+mcp-sentinel permissions grant [--name <NAME>] --secrets <SPEC1,SPEC2,...> -- <COMMAND> [ARGS]...
 
 # Revoke authorization for a specific fingerprint
 mcp-sentinel permissions revoke <FINGERPRINT_HEX>

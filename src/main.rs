@@ -362,6 +362,34 @@ async fn main() {
                     }
                 }
             }
+            PermCommands::Grant { name, secrets, cmd } => {
+                if cmd.is_empty() {
+                    eprintln!("Error: No command specified to authorize.");
+                    exit(1);
+                }
+                let mappings = match vault::parse_specs(&secrets) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!("Configuration Error: {}", e);
+                        exit(1);
+                    }
+                };
+                let canonical_specs: Vec<String> =
+                    mappings.iter().map(|m| m.canonical_spec()).collect();
+                let fingerprint = policy::compute_fingerprint(&cmd);
+                match policy::record_grant(&fingerprint, name, &cmd, &canonical_specs) {
+                    Ok(()) => {
+                        println!(
+                            "✅ Successfully pre-authorized MCP server (Fingerprint: {}).",
+                            &fingerprint[..12]
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("Error: Failed to record permission grant: {}", e);
+                        exit(1);
+                    }
+                }
+            }
             PermCommands::Revoke { id } => match policy::revoke_grant(&id) {
                 Ok(true) => println!("Permission '{}' has been revoked.", id),
                 Ok(false) => {

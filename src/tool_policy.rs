@@ -105,7 +105,7 @@ pub fn default_preset_profiles() -> HashMap<String, ToolProfile> {
     map
 }
 
-/// Matches a string against a pattern supporting `*` wildcards (case-insensitive).
+/// Matches a string against a pattern supporting `*` and `?` wildcards (case-insensitive) with full backtracking.
 pub fn matches_pattern(candidate: &str, pattern: &str) -> bool {
     let candidate = candidate.to_lowercase();
     let pattern = pattern.to_lowercase();
@@ -114,38 +114,39 @@ pub fn matches_pattern(candidate: &str, pattern: &str) -> bool {
         return true;
     }
 
-    if !pattern.contains('*') {
+    if !pattern.contains('*') && !pattern.contains('?') {
         return candidate == pattern;
     }
 
-    let parts: Vec<&str> = pattern.split('*').collect();
-    let mut search_idx = 0;
+    let s_chars: Vec<char> = candidate.chars().collect();
+    let p_chars: Vec<char> = pattern.chars().collect();
+    let mut s_idx = 0;
+    let mut p_idx = 0;
+    let mut star_idx = None;
+    let mut match_idx = 0;
 
-    for (i, &part) in parts.iter().enumerate() {
-        if part.is_empty() {
-            continue;
-        }
-
-        if i == 0 {
-            // First part must be a prefix
-            if !candidate.starts_with(part) {
-                return false;
-            }
-            search_idx = part.len();
-        } else if i == parts.len() - 1 && !pattern.ends_with('*') {
-            // Last part must be a suffix
-            return candidate[search_idx..].ends_with(part);
+    while s_idx < s_chars.len() {
+        if p_idx < p_chars.len() && (p_chars[p_idx] == s_chars[s_idx] || p_chars[p_idx] == '?') {
+            s_idx += 1;
+            p_idx += 1;
+        } else if p_idx < p_chars.len() && p_chars[p_idx] == '*' {
+            star_idx = Some(p_idx);
+            match_idx = s_idx;
+            p_idx += 1;
+        } else if let Some(star) = star_idx {
+            p_idx = star + 1;
+            match_idx += 1;
+            s_idx = match_idx;
         } else {
-            // Substring search after current position
-            if let Some(pos) = candidate[search_idx..].find(part) {
-                search_idx += pos + part.len();
-            } else {
-                return false;
-            }
+            return false;
         }
     }
 
-    true
+    while p_idx < p_chars.len() && p_chars[p_idx] == '*' {
+        p_idx += 1;
+    }
+
+    p_idx == p_chars.len()
 }
 
 /// Evaluates whether an MCP tool call is permitted by a `ToolProfile`.
@@ -318,6 +319,10 @@ mod tests {
         assert!(matches_pattern("admin_drop_database", "*drop*"));
         assert!(matches_pattern("delete", "*delete*"));
         assert!(matches_pattern("execute_sql", "*"));
+        assert!(matches_pattern("ababc", "*ab*bc"));
+        assert!(matches_pattern("axaybz", "*a*b*"));
+        assert!(matches_pattern("tool_read", "?ool_*"));
+        assert!(!matches_pattern("tool_read", "?ool"));
     }
 
     #[test]

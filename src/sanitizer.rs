@@ -1,8 +1,5 @@
 use std::collections::HashMap;
 use std::env;
-use std::sync::OnceLock;
-
-static CURRENT_EXE_DIR: OnceLock<Option<String>> = OnceLock::new();
 
 #[cfg(windows)]
 const SAFE_KEYS: &[&str] = &[
@@ -27,45 +24,30 @@ const SAFE_KEYS: &[&str] = &[
 
 #[cfg(unix)]
 const SAFE_KEYS: &[&str] = &[
-    "PATH", "HOME", "USER", "SHELL", "TMPDIR", "LANG", "LC_ALL", "TERM",
+    "PATH",
+    "HOME",
+    "USER",
+    "SHELL",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "TERM",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_RUNTIME_DIR",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "VIRTUAL_ENV",
 ];
 
 /// Builds a sanitized environment map containing only safe system variables
-/// and explicitly injected secrets. Filters out the directory containing the mcp-sentinel
-/// binary to prevent child processes from calling sentinel, and injects a child security context.
+/// and explicitly injected secrets. Injects a child security context lock to prevent recursion.
 pub fn build_sanitized_env(secrets_to_inject: &HashMap<String, String>) -> HashMap<String, String> {
     let mut clean_env = HashMap::new();
 
-    let current_exe_dir_str = CURRENT_EXE_DIR.get_or_init(|| {
-        env::current_exe().ok().and_then(|p| {
-            p.parent().map(|d| {
-                d.to_string_lossy()
-                    .trim_end_matches(['\\', '/'])
-                    .to_lowercase()
-            })
-        })
-    });
-
     for &key in SAFE_KEYS {
         if let Ok(val) = env::var(key) {
-            if key.eq_ignore_ascii_case("PATH") {
-                if let Some(ref exe_dir_str) = current_exe_dir_str {
-                    let filtered_paths: Vec<_> = env::split_paths(&val)
-                        .filter(|p| {
-                            let p_str = p
-                                .to_string_lossy()
-                                .trim_end_matches(['\\', '/'])
-                                .to_lowercase();
-                            p_str != *exe_dir_str
-                        })
-                        .collect();
-
-                    if let Ok(new_path) = env::join_paths(filtered_paths) {
-                        clean_env.insert(key.to_string(), new_path.to_string_lossy().to_string());
-                        continue;
-                    }
-                }
-            }
             clean_env.insert(key.to_string(), val);
         }
     }

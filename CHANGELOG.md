@@ -60,8 +60,18 @@ This release introduces comprehensive Layer 7 tool call interception, automated 
   - Automated dual-release GitHub Actions CI/CD publishing both `mcp-sentinel` (Full with TUI) and `mcp-sentinel-headless` (Micro-binary).
   - One-line install scripts (`install.ps1`, `install.sh`) now support `-Headless` / `--headless`.
 
+### 🛡️ Security Hardening & Bug Fixes
+
+- **JSON-RPC Batch Request Firewall**: Extended L7 firewall to recursively parse and validate JSON-RPC batch arrays, ensuring destructive calls cannot bypass policies via batch smuggling.
+- **Headless Pre-Authorization CLI (`mcp-sentinel permissions grant`)**: Added command to pre-authorize MCP servers on headless or remote SSH servers without requiring interactive prompts.
+- **Strict Hardware/OS Keyring Storage**: Master encryption key now stays exclusively in OS Keyring; disk fallback file `.master_key` is completely disabled unless explicitly requested via `MCP_SENTINEL_ALLOW_INSECURE_KEYFILE=1`.
+- **DLP Safe Word Protection**: Excluded common programming and configuration literals (`false`, `true`, `null`, `production`, etc.) from redactor dictionary, preventing corruption of valid JSON RPC responses.
+- **Subprocess Tree Teardown on Unix**: Configured process groups with automatic `SIGTERM` signal propagation on proxy termination to eliminate orphan background processes.
+- **System Tool & Path Safety**: Eliminated recursive directory stripping from `PATH` and included standard Linux variables (`XDG_*`, `SSL_CERT_*`, `VIRTUAL_ENV`) in whitelist.
+- **Case-Preserving Config Migration**: Preserved camelCase env keys and added leading underscore sanitization for numeric names during `mcp-sentinel migrate`.
+
 ### 🛡️ Test Coverage & Quality
-- **82/82 automated tests passing** across Unit, Integration, Performance, Security Hacking, and Stress test suites.
+- **85/85 automated tests passing** across Unit, Integration, Performance, Security Hacking, and Stress test suites.
 - 0 compiler warnings, 0 clippy warnings, 100% rustfmt compliant.
 
 ---
