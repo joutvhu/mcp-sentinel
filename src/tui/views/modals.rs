@@ -398,13 +398,21 @@ pub fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(name, Style::default().fg(Color::Yellow).bold()),
                 Span::raw("  "),
                 if is_builtin {
-                    Span::styled("[ BUILT-IN PRESET ]", Style::default().fg(Color::Cyan).bold())
+                    Span::styled(
+                        "[ BUILT-IN PRESET ]",
+                        Style::default().fg(Color::Cyan).bold(),
+                    )
                 } else {
-                    Span::styled("[ CUSTOM PROFILE ]", Style::default().fg(Color::Green).bold())
+                    Span::styled(
+                        "[ CUSTOM PROFILE ]",
+                        Style::default().fg(Color::Green).bold(),
+                    )
                 },
             ]));
 
-            let desc = description.as_deref().unwrap_or("(No description provided)");
+            let desc = description
+                .as_deref()
+                .unwrap_or("(No description provided)");
             lines.push(Line::from(vec![
                 Span::styled("Description:      ", Style::default().fg(Color::DarkGray)),
                 Span::styled(desc, Style::default().fg(Color::White)),

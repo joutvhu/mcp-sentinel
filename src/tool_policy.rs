@@ -169,7 +169,7 @@ pub fn evaluate_tool_call(tool_name: &str, profile: &ToolProfile) -> ToolDecisio
             .any(|pat| matches_pattern(tool_clean, pat));
         if !allowed {
             return ToolDecision::Blocked {
-                reason: format!("Does not match any pattern in the allow whitelist"),
+                reason: "Does not match any pattern in the allow whitelist".to_string(),
             };
         }
     }

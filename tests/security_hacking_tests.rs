@@ -546,7 +546,10 @@ fn hack_test_allow_once_does_not_persist_grant() {
     let spec = format!("MY_KEY={}", vault_key);
 
     // Ensure it is NOT already authorized
-    assert!(!mcp_sentinel::policy::is_authorized(&fp, &[spec.clone()]));
+    assert!(!mcp_sentinel::policy::is_authorized(
+        &fp,
+        std::slice::from_ref(&spec)
+    ));
 
     // 1. Run with Mock Dialog answering "Allow Once"
     let output1 = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
@@ -561,7 +564,7 @@ fn hack_test_allow_once_does_not_persist_grant() {
 
     // Verify: The permission must NOT have been saved to permissions.json!
     assert!(
-        !mcp_sentinel::policy::is_authorized(&fp, &[spec.clone()]),
+        !mcp_sentinel::policy::is_authorized(&fp, std::slice::from_ref(&spec)),
         "Grant must NOT be persisted when 'Allow Once' is selected!"
     );
 
@@ -595,7 +598,7 @@ fn hack_test_allow_once_does_not_persist_grant() {
 
     assert!(output3.status.success());
     assert!(
-        !mcp_sentinel::policy::is_authorized(&fp, &[spec.clone()]),
+        !mcp_sentinel::policy::is_authorized(&fp, std::slice::from_ref(&spec)),
         "--allow-once flag must prevent persisting grant even if dialog returned AllowAlways!"
     );
 

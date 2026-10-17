@@ -40,6 +40,7 @@ pub enum AuthDecision {
 /// - [Allow Always]: Grants access and records permission in permissions.json for future runs.
 /// - [Allow Once]: Grants access for this execution only (ephemeral; does not save to disk).
 /// - [Deny]: Rejects access and terminates the process.
+///
 /// Includes a 30-second timeout to prevent locking host IDEs/clients indefinitely.
 pub fn ask_user_permission(command_name: &str, secrets: &[String]) -> AuthDecision {
     // Check mock test variable first if present

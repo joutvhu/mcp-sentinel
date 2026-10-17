@@ -3,10 +3,10 @@ use ratatui::{
     widgets::{ListState, TableState},
 };
 
+use super::widgets::InputField;
 use crate::policy::{self, PolicyFile};
 use crate::tool_policy::{self, ToolProfile};
 use crate::vault;
-use super::widgets::InputField;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FocusArea {

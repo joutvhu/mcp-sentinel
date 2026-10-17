@@ -123,10 +123,7 @@ pub fn render_header(f: &mut Frame, area: Rect) {
             Line::from(vec![
                 Span::styled("OS Credential Enclave", Style::default().fg(Color::Green)),
                 Span::raw(" | "),
-                Span::styled(
-                    "HMAC-SHA256 TOFU Policy",
-                    Style::default().fg(Color::Cyan),
-                ),
+                Span::styled("HMAC-SHA256 TOFU Policy", Style::default().fg(Color::Cyan)),
                 Span::raw(" | "),
                 Span::styled("Subprocess Sandbox", Style::default().fg(Color::Yellow)),
                 Span::raw(" | "),
@@ -272,9 +269,7 @@ pub fn render_footer(f: &mut Frame, app: &mut App, area: Rect) {
             AppTab::ToolProfiles => {
                 "[Up/Down/Wheel] Scroll Rules  [Enter/v] Full Modal  [Left/Esc] Back to List"
             }
-            AppTab::System => {
-                "[Up/Down/Wheel] Scroll Overview  [Left/Esc] Back to Menu  [q] Quit"
-            }
+            AppTab::System => "[Up/Down/Wheel] Scroll Overview  [Left/Esc] Back to Menu  [q] Quit",
         },
     };
 

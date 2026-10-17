@@ -10,11 +10,11 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, style::Color, Terminal};
 
+use super::app::{App, AppTab, FocusArea, ModalState, SidebarAction, SIDEBAR_MENU};
+use super::views::ui;
 use crate::policy;
 use crate::tool_policy;
 use crate::vault;
-use super::app::{App, AppTab, FocusArea, ModalState, SidebarAction, SIDEBAR_MENU};
-use super::views::ui;
 
 pub fn run_tui() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
@@ -28,7 +28,11 @@ pub fn run_tui() -> Result<(), Box<dyn std::error::Error>> {
     let res = main_loop(&mut terminal, &mut app);
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     if let Err(err) = res {
@@ -79,7 +83,8 @@ fn main_loop<B: ratatui::backend::Backend>(
                                         "Error: Secret key name cannot be empty.".to_string(),
                                         Color::Red,
                                     ));
-                                } else if let Err(err_msg) = vault::validate_key_name(&key_trimmed) {
+                                } else if let Err(err_msg) = vault::validate_key_name(&key_trimmed)
+                                {
                                     app.status_message = Some((err_msg, Color::Red));
                                 } else {
                                     match vault::set_secret(&key_trimmed, &val_trimmed) {
@@ -169,8 +174,10 @@ fn main_loop<B: ratatui::backend::Backend>(
                                     }
                                     Err(e) => {
                                         app.modal = ModalState::None;
-                                        app.status_message =
-                                            Some((format!("Error deleting secret: {}", e), Color::Red));
+                                        app.status_message = Some((
+                                            format!("Error deleting secret: {}", e),
+                                            Color::Red,
+                                        ));
                                     }
                                 }
                             }
@@ -222,7 +229,10 @@ fn main_loop<B: ratatui::backend::Backend>(
                                         app.reload_tool_profiles();
                                         app.modal = ModalState::None;
                                         app.status_message = Some((
-                                            format!("✓ Tool profile '{}' deleted successfully.", name),
+                                            format!(
+                                                "✓ Tool profile '{}' deleted successfully.",
+                                                name
+                                            ),
                                             Color::Green,
                                         ));
                                     }
@@ -244,14 +254,17 @@ fn main_loop<B: ratatui::backend::Backend>(
                             }
                             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                                 app.modal = ModalState::None;
-                                app.status_message =
-                                    Some(("Delete profile cancelled.".to_string(), Color::DarkGray));
+                                app.status_message = Some((
+                                    "Delete profile cancelled.".to_string(),
+                                    Color::DarkGray,
+                                ));
                             }
                             _ => {}
                         },
 
                         ModalState::ConfirmResetGrants => match key.code {
-                            KeyCode::Char('y') | KeyCode::Char('Y') => match policy::reset_grants() {
+                            KeyCode::Char('y') | KeyCode::Char('Y') => match policy::reset_grants()
+                            {
                                 Ok(_) => {
                                     app.reload_permissions();
                                     app.modal = ModalState::None;
@@ -277,7 +290,10 @@ fn main_loop<B: ratatui::backend::Backend>(
                         },
 
                         ModalState::RevealSecret { .. } => match key.code {
-                            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('v') | KeyCode::Char('q') => {
+                            KeyCode::Esc
+                            | KeyCode::Enter
+                            | KeyCode::Char('v')
+                            | KeyCode::Char('q') => {
                                 app.modal = ModalState::None;
                             }
                             KeyCode::Up | KeyCode::Char('k') => {
@@ -319,7 +335,10 @@ fn main_loop<B: ratatui::backend::Backend>(
                         },
 
                         ModalState::ViewProfile { name, .. } => match key.code {
-                            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('v') => {
+                            KeyCode::Esc
+                            | KeyCode::Enter
+                            | KeyCode::Char('q')
+                            | KeyCode::Char('v') => {
                                 app.modal = ModalState::None;
                             }
                             KeyCode::Up | KeyCode::Char('k') => {
@@ -355,13 +374,18 @@ fn main_loop<B: ratatui::backend::Backend>(
                                         app.reload_secrets();
                                         app.modal = ModalState::None;
                                         app.status_message = Some((
-                                            format!("✓ Secret '{}' updated successfully!", key_name),
+                                            format!(
+                                                "✓ Secret '{}' updated successfully!",
+                                                key_name
+                                            ),
                                             Color::Green,
                                         ));
                                     }
                                     Err(e) => {
-                                        app.status_message =
-                                            Some((format!("Error updating secret: {}", e), Color::Red));
+                                        app.status_message = Some((
+                                            format!("Error updating secret: {}", e),
+                                            Color::Red,
+                                        ));
                                     }
                                 }
                             }
@@ -433,7 +457,8 @@ fn main_loop<B: ratatui::backend::Backend>(
                                     app.reload_permissions();
                                     app.reload_tool_profiles();
                                     app.status_message = Some((
-                                        "✓ Vault, permissions, and tool profiles reloaded.".to_string(),
+                                        "✓ Vault, permissions, and tool profiles reloaded."
+                                            .to_string(),
                                         Color::Cyan,
                                     ));
                                     continue;
