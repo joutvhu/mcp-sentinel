@@ -367,6 +367,25 @@ No. <code>permissions.json</code> is guarded by an <b>HMAC-SHA256 signature</b> 
 No. Once authorized, <code>mcp-sentinel</code> acts as an ultra-fast asynchronous duplex stream proxy. It forwards raw bytes between <code>stdin</code> and <code>stdout</code> at over 26,000 messages per second with microsecond latency.
 </details>
 
+<details>
+<summary><b>Can a compromised MCP server invoke <code>mcp-sentinel</code> to steal other secrets?</b></summary>
+No. <code>mcp-sentinel</code> enforces a strict two-layer anti-recursion defense:
+<ol>
+  <li>The directory containing the <code>mcp-sentinel</code> binary is automatically filtered out of the child process's <code>PATH</code>.</li>
+  <li>A security canary flag (<code>MCP_SENTINEL_CHILD_CONTEXT=1</code>) is locked into the child environment. Any recursive invocation of <code>mcp-sentinel</code> from within the sandbox immediately terminates with exit code <code>13</code> (Permission Denied).</li>
+</ol>
+</details>
+
+<details>
+<summary><b>How do I revoke a previously granted permission?</b></summary>
+Run <code>mcp-sentinel permissions list</code> to view all active grants and their fingerprint IDs. To revoke a single grant, run <code>mcp-sentinel permissions revoke &lt;FINGERPRINT_HEX&gt;</code>. To wipe all grants and force fresh prompts for every server, run <code>mcp-sentinel permissions reset</code>.
+</details>
+
+<details>
+<summary><b>Does mcp-sentinel require Administrator or Root privileges?</b></summary>
+No. <code>mcp-sentinel</code> runs entirely in user-space, storing credentials inside your personal OS user vault (Windows Credential Manager, macOS Keychain, or Linux Secret Service). It strictly adheres to the principle of least privilege and does not require elevated rights.
+</details>
+
 ---
 
 ## 📄 License
