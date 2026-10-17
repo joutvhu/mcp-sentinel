@@ -94,13 +94,19 @@ async fn main() {
         }
 
         Commands::Secret { action } => match action {
-            SecretCommands::Set { key, value } => match vault::set_secret(&key, &value) {
-                Ok(_) => println!("Secret '{}' successfully stored in OS Keyring.", key),
-                Err(e) => {
-                    eprintln!("Error saving secret '{}': {}", key, e);
+            SecretCommands::Set { key, value } => {
+                if let Err(msg) = vault::validate_key_name(&key) {
+                    eprintln!("Error: {}", msg);
                     exit(1);
                 }
-            },
+                match vault::set_secret(&key, &value) {
+                    Ok(_) => println!("Secret '{}' successfully stored in OS Keyring.", key),
+                    Err(e) => {
+                        eprintln!("Error saving secret '{}': {}", key, e);
+                        exit(1);
+                    }
+                }
+            }
             SecretCommands::Get { key } => match vault::get_secret(&key) {
                 Ok(val) => println!("{}", val),
                 Err(e) => {

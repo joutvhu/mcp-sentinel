@@ -196,3 +196,28 @@ fn hack_test_child_process_cannot_invoke_sentinel() {
         "Must output security violation error"
     );
 }
+
+/// HACK ATTACK 7: Setting Reserved or Malformed Secret Key Names Blocked
+/// An attacker attempts to set reserved prefixes (MCP_SENTINEL_*) or inject special characters into keys.
+/// mcp-sentinel must reject the key name and exit with a failure code.
+#[test]
+fn hack_test_setting_reserved_key_names_blocked() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args(["secret", "set", "MCP_SENTINEL_CHILD_CONTEXT", "0"])
+        .output()
+        .expect("Failed to execute mcp-sentinel secret set");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("reserved prefix"));
+
+    // Also test invalid characters
+    let output_invalid = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args(["secret", "set", "KEY=MALICIOUS", "value"])
+        .output()
+        .expect("Failed to execute mcp-sentinel secret set");
+
+    assert!(!output_invalid.status.success());
+    let stderr_invalid = String::from_utf8_lossy(&output_invalid.stderr);
+    assert!(stderr_invalid.contains("invalid character"));
+}

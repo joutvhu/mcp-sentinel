@@ -39,14 +39,11 @@ pub fn get_or_create_master_key() -> Result<Vec<u8>, String> {
     let key = match crate::vault::get_secret(MASTER_SIGNING_KEY_NAME) {
         Ok(hex_str) => hex::decode(&hex_str).map_err(|e| e.to_string())?,
         Err(_) => {
+            use rand::rngs::OsRng;
+            use rand::RngCore;
+
             let mut key_bytes = [0u8; 32];
-            let mut hasher = Sha256::new();
-            hasher.update(Utc::now().to_rfc3339().as_bytes());
-            hasher.update(std::process::id().to_le_bytes());
-            hasher.update(b"MCP_SENTINEL_MASTER_POLICY_SIGNING_KEY_SEED");
-            let ptr_entropy = &key_bytes as *const _ as usize;
-            hasher.update(ptr_entropy.to_le_bytes());
-            key_bytes.copy_from_slice(&hasher.finalize());
+            OsRng.fill_bytes(&mut key_bytes);
 
             let hex_key = hex::encode(key_bytes);
             let _ = crate::vault::set_secret(MASTER_SIGNING_KEY_NAME, &hex_key);

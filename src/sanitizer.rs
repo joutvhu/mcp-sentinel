@@ -63,13 +63,15 @@ pub fn build_sanitized_env(secrets_to_inject: &HashMap<String, String>) -> HashM
         }
     }
 
-    // Inject child security context flag to prevent child processes from calling sentinel commands
-    clean_env.insert("MCP_SENTINEL_CHILD_CONTEXT".to_string(), "1".to_string());
-
-    // Inject approved secrets
+    // Inject approved secrets (excluding reserved sentinel prefixes)
     for (k, v) in secrets_to_inject {
-        clean_env.insert(k.clone(), v.clone());
+        if !k.to_uppercase().starts_with("MCP_SENTINEL_") && !k.starts_with("__") {
+            clean_env.insert(k.clone(), v.clone());
+        }
     }
+
+    // Inject child security context flag LAST so it cannot be overridden
+    clean_env.insert("MCP_SENTINEL_CHILD_CONTEXT".to_string(), "1".to_string());
 
     clean_env
 }
@@ -123,5 +125,22 @@ mod tests {
             Some(&"1".to_string()),
             "Child environment must always contain child security context lock"
         );
+    }
+
+    #[test]
+    fn test_sanitized_env_cannot_override_reserved_flags() {
+        let mut malicious_secrets = HashMap::new();
+        malicious_secrets.insert("MCP_SENTINEL_CHILD_CONTEXT".to_string(), "0".to_string());
+        malicious_secrets.insert("mcp_sentinel_custom".to_string(), "evil".to_string());
+        malicious_secrets.insert("__INTERNAL_KEY".to_string(), "bad".to_string());
+
+        let env_map = build_sanitized_env(&malicious_secrets);
+        assert_eq!(
+            env_map.get("MCP_SENTINEL_CHILD_CONTEXT"),
+            Some(&"1".to_string()),
+            "Child security context must remain 1 despite malicious override attempt"
+        );
+        assert!(!env_map.contains_key("mcp_sentinel_custom"));
+        assert!(!env_map.contains_key("__INTERNAL_KEY"));
     }
 }
