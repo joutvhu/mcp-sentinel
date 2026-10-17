@@ -1,13 +1,38 @@
 #!/usr/bin/env bash
 # MCP-Sentinel macOS & Linux Quick Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/joutvhu/mcp-sentinel/main/install.sh | sh
+# Usage:
+#   Standard (Default, with TUI Dashboard):
+#     curl -fsSL https://raw.githubusercontent.com/joutvhu/mcp-sentinel/main/install.sh | sh
+#   Headless (Micro-binary, no TUI):
+#     curl -fsSL https://raw.githubusercontent.com/joutvhu/mcp-sentinel/main/install.sh | sh -s -- --headless
+#     or: MCP_SENTINEL_HEADLESS=1 curl -fsSL https://raw.githubusercontent.com/joutvhu/mcp-sentinel/main/install.sh | sh
 
 set -e
 
+HEADLESS=0
+for arg in "$@"; do
+    case "$arg" in
+        --headless|-headless)
+            HEADLESS=1
+            ;;
+    esac
+done
+
+if [ "$MCP_SENTINEL_HEADLESS" = "1" ] || [ "$MCP_SENTINEL_HEADLESS" = "true" ]; then
+    HEADLESS=1
+fi
+
 REPO="joutvhu/mcp-sentinel"
 BIN_NAME="mcp-sentinel"
+EDITION="Standard"
+ASSET_PREFIX="mcp-sentinel"
 
-printf "\033[36m🛡️ Installing mcp-sentinel for macOS / Linux...\033[0m\n"
+if [ "$HEADLESS" -eq 1 ]; then
+    EDITION="Headless"
+    ASSET_PREFIX="mcp-sentinel-headless"
+fi
+
+printf "\033[36m🛡️ Installing mcp-sentinel for macOS / Linux (%s Edition)...\033[0m\n" "$EDITION"
 
 # 1. Detect OS
 OS_TYPE="$(uname -s)"
@@ -40,7 +65,7 @@ case "$ARCH_TYPE" in
 esac
 
 TARGET="${ARCH}-${OS}"
-ASSET_NAME="mcp-sentinel-${TARGET}.tar.gz"
+ASSET_NAME="${ASSET_PREFIX}-${TARGET}.tar.gz"
 
 # 3. Determine Installation Directory
 if [ -w "/usr/local/bin" ]; then

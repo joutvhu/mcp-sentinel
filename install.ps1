@@ -1,9 +1,23 @@
 # MCP-Sentinel Windows Quick Installer
-# Usage: irm https://raw.githubusercontent.com/joutvhu/mcp-sentinel/main/install.ps1 | iex
+# Usage:
+#   Standard (Default, with TUI Dashboard):
+#     irm https://raw.githubusercontent.com/joutvhu/mcp-sentinel/main/install.ps1 | iex
+#   Headless (Micro-binary, no TUI):
+#     & { $(irm https://raw.githubusercontent.com/joutvhu/mcp-sentinel/main/install.ps1) } -Headless
+#     or: $env:MCP_SENTINEL_HEADLESS = 1; irm https://raw.githubusercontent.com/joutvhu/mcp-sentinel/main/install.ps1 | iex
+
+param(
+    [switch]$Headless = $false
+)
 
 $ErrorActionPreference = 'Stop'
 
-Write-Host "🛡️ Installing mcp-sentinel for Windows..." -ForegroundColor Cyan
+if ($env:MCP_SENTINEL_HEADLESS -eq '1' -or $env:MCP_SENTINEL_HEADLESS -eq 'true') {
+    $Headless = $true
+}
+
+$Edition = if ($Headless) { "Headless" } else { "Standard" }
+Write-Host "🛡️ Installing mcp-sentinel for Windows ($Edition Edition)..." -ForegroundColor Cyan
 
 $Repo = "joutvhu/mcp-sentinel"
 $InstallDir = "$env:LOCALAPPDATA\Programs\mcp-sentinel"
@@ -28,7 +42,8 @@ try {
     $Version = "latest"
 }
 
-$AssetFilename = "mcp-sentinel-x86_64-pc-windows-msvc.zip"
+$AssetPrefix = if ($Headless) { "mcp-sentinel-headless" } else { "mcp-sentinel" }
+$AssetFilename = "$AssetPrefix-x86_64-pc-windows-msvc.zip"
 $DownloadUrl = "https://github.com/$Repo/releases/download/$Version/$AssetFilename"
 if ($Version -eq "latest") {
     $DownloadUrl = "https://github.com/$Repo/releases/latest/download/$AssetFilename"

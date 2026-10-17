@@ -52,24 +52,58 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libdbus-1-dev libgtk-3-dev
 
-      - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Package release artifact (Windows)
+      - name: Build and package release artifacts (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $ArchiveName = "mcp-sentinel-${{ matrix.target }}.zip"
-          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" -DestinationPath $ArchiveName -Force
-          $Hash = (Get-FileHash -Path $ArchiveName -Algorithm SHA256).Hash.ToLower()
-          "$Hash *$ArchiveName" | Out-File -FilePath "$ArchiveName.sha256" -Encoding ascii
+          $Target = "${{ matrix.target }}"
+          $BinName = "${{ matrix.bin_name }}"
 
-      - name: Package release artifact (Unix)
+          # 1. Standard build (Default with TUI)
+          cargo build --release --target $Target
+          New-Item -ItemType Directory -Path "pkg/standard" -Force | Out-Null
+          Copy-Item "target/$Target/release/$BinName" "pkg/standard/$BinName"
+
+          # 2. Headless build (Core CLI without TUI)
+          cargo build --release --target $Target --no-default-features
+          New-Item -ItemType Directory -Path "pkg/headless" -Force | Out-Null
+          Copy-Item "target/$Target/release/$BinName" "pkg/headless/$BinName"
+
+          # 3. Create zip archives
+          $StdArchive = "mcp-sentinel-$Target.zip"
+          Compress-Archive -Path "pkg/standard/$BinName" -DestinationPath $StdArchive -Force
+          $StdHash = (Get-FileHash -Path $StdArchive -Algorithm SHA256).Hash.ToLower()
+          "$StdHash *$StdArchive" | Out-File -FilePath "$StdArchive.sha256" -Encoding ascii
+
+          $HeadlessArchive = "mcp-sentinel-headless-$Target.zip"
+          Compress-Archive -Path "pkg/headless/$BinName" -DestinationPath $HeadlessArchive -Force
+          $HeadlessHash = (Get-FileHash -Path $HeadlessArchive -Algorithm SHA256).Hash.ToLower()
+          "$HeadlessHash *$HeadlessArchive" | Out-File -FilePath "$HeadlessArchive.sha256" -Encoding ascii
+
+      - name: Build and package release artifacts (Unix)
         if: runner.os != 'Windows'
         run: |
-          ARCHIVE_NAME="mcp-sentinel-${{ matrix.target }}.tar.gz"
-          tar -czvf "$ARCHIVE_NAME" -C "target/${{ matrix.target }}/release" "${{ matrix.bin_name }}"
-          shasum -a 256 "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
+          TARGET="${{ matrix.target }}"
+          BIN_NAME="${{ matrix.bin_name }}"
+
+          # 1. Standard build (Default with TUI)
+          cargo build --release --target "$TARGET"
+          mkdir -p pkg/standard
+          cp "target/$TARGET/release/$BIN_NAME" "pkg/standard/$BIN_NAME"
+
+          # 2. Headless build (Core CLI without TUI)
+          cargo build --release --target "$TARGET" --no-default-features
+          mkdir -p pkg/headless
+          cp "target/$TARGET/release/$BIN_NAME" "pkg/headless/$BIN_NAME"
+
+          # 3. Create tar.gz archives
+          STD_ARCHIVE="mcp-sentinel-${TARGET}.tar.gz"
+          tar -czvf "$STD_ARCHIVE" -C pkg/standard "$BIN_NAME"
+          shasum -a 256 "$STD_ARCHIVE" > "$STD_ARCHIVE.sha256"
+
+          HEADLESS_ARCHIVE="mcp-sentinel-headless-${TARGET}.tar.gz"
+          tar -czvf "$HEADLESS_ARCHIVE" -C pkg/headless "$BIN_NAME"
+          shasum -a 256 "$HEADLESS_ARCHIVE" > "$HEADLESS_ARCHIVE.sha256"
 
       - name: Upload release assets to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -78,6 +112,8 @@ jobs:
           files: |
             mcp-sentinel-${{ matrix.target }}.${{ matrix.archive_ext }}
             mcp-sentinel-${{ matrix.target }}.${{ matrix.archive_ext }}.sha256
+            mcp-sentinel-headless-${{ matrix.target }}.${{ matrix.archive_ext }}
+            mcp-sentinel-headless-${{ matrix.target }}.${{ matrix.archive_ext }}.sha256
 
   # 2. Automatically publish to Crates.io (requires CARGO_REGISTRY_TOKEN in GitHub Secrets)
   publish-crates-io:

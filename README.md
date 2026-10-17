@@ -116,15 +116,23 @@ required**.
 - **Windows (PowerShell):**
 
   ```powershell
+  # Standard Edition (with TUI Dashboard - Default)
   irm https://raw.githubusercontent.com/joutvhu/mcp-sentinel/main/install.ps1 | iex
+
+  # Headless Edition (Micro-binary without TUI, ideal for CI/CD & Docker)
+  & { $(irm https://raw.githubusercontent.com/joutvhu/mcp-sentinel/main/install.ps1) } -Headless
   ```
 
 - **macOS & Linux:**
   ```bash
+  # Standard Edition (with TUI Dashboard - Default)
   curl -fsSL https://raw.githubusercontent.com/joutvhu/mcp-sentinel/main/install.sh | sh
+
+  # Headless Edition (Micro-binary without TUI, ideal for CI/CD & Docker)
+  curl -fsSL https://raw.githubusercontent.com/joutvhu/mcp-sentinel/main/install.sh | sh -s -- --headless
   ```
 
-### 2. Package Managers
+### 2. Package Managers & Cargo
 
 - **macOS / Linux (Homebrew):**
 
@@ -140,7 +148,11 @@ required**.
 
 - **Rust / Cargo:**
   ```bash
+  # Standard Edition
   cargo install mcp-sentinel
+
+  # Headless Edition
+  cargo install mcp-sentinel --no-default-features
   ```
 
 ### 3. Upgrading
