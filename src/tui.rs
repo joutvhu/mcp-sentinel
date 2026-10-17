@@ -630,7 +630,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(26), // Sidebar fixed width
+            Constraint::Length(28), // Sidebar fixed width
             Constraint::Min(40),    // Main content
         ])
         .split(chunks[1]);
@@ -695,6 +695,7 @@ fn render_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         Style::default().fg(Color::White)
     };
 
+    let inner_width = (area.width.saturating_sub(2) as usize).max(20);
     let mut items = Vec::new();
 
     for (i, (action, label, shortcut)) in SIDEBAR_MENU.iter().enumerate() {
@@ -715,13 +716,25 @@ fn render_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             }
         };
 
+        let fixed_len = 2 + label.len() + shortcut.len();
+        let pad_len = if inner_width > fixed_len {
+            inner_width - fixed_len
+        } else {
+            1
+        };
+        let padding = " ".repeat(pad_len);
+
+        let shortcut_style = if is_selected {
+            Style::default().fg(Color::Cyan).bold()
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
         items.push(ListItem::new(Line::from(vec![
             Span::styled(prefix, style),
-            Span::styled(format!("{:<15}", label), style),
-            Span::styled(
-                format!("{:>4}", shortcut),
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled(*label, style),
+            Span::raw(padding),
+            Span::styled(*shortcut, shortcut_style),
         ])));
     }
 
