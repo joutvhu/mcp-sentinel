@@ -45,6 +45,10 @@ pub enum Commands {
         #[arg(long, value_delimiter = ',')]
         allow_tools: Vec<String>,
 
+        /// Enable Security Audit Logging (default: false / disabled). Writes security events and tool call history to audit.log
+        #[arg(long)]
+        audit: bool,
+
         /// Command and arguments to execute (after --)
         #[arg(last = true, required = true)]
         cmd: Vec<String>,
@@ -69,6 +73,13 @@ pub enum Commands {
     ToolPolicy {
         #[command(subcommand)]
         action: ToolPolicyCommands,
+    },
+
+    /// Inspect, query, or purge security audit logs
+    #[command(alias = "audits")]
+    Audit {
+        #[command(subcommand)]
+        action: AuditCommands,
     },
 
     /// Launch the interactive Terminal User Interface (TUI) Dashboard
@@ -161,6 +172,28 @@ pub enum ToolPolicyCommands {
     },
 }
 
+#[derive(Subcommand, Debug)]
+pub enum AuditCommands {
+    /// List recorded audit events
+    List {
+        /// Maximum number of events to show (default: 50)
+        #[arg(short, long, default_value = "50")]
+        limit: usize,
+
+        /// Only show events where a tool call was blocked
+        #[arg(long)]
+        blocked_only: bool,
+
+        /// Filter by specific event type (e.g. TOOL_BLOCKED, SERVER_START)
+        #[arg(short, long)]
+        event: Option<String>,
+    },
+    /// Clear and purge all audit logs
+    Clear,
+    /// View audit logging subsystem status and metrics
+    Status,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,6 +222,7 @@ mod tests {
                 profile,
                 deny_tools,
                 allow_tools,
+                audit,
             } => {
                 assert_eq!(secrets, vec!["KEY_A".to_string(), "KEY_B".to_string()]);
                 assert_eq!(name, Some("My Server".to_string()));
@@ -198,6 +232,7 @@ mod tests {
                 assert_eq!(profile, None);
                 assert!(deny_tools.is_empty());
                 assert!(allow_tools.is_empty());
+                assert!(!audit);
             }
             _ => panic!("Expected Commands::Run"),
         }
@@ -505,6 +540,78 @@ mod tests {
                 assert_eq!(file, Some(std::path::PathBuf::from("my_config.json")));
             }
             _ => panic!("Expected Commands::Migrate"),
+        }
+    }
+
+    #[test]
+    fn test_parse_audit_commands() {
+        let cli_list = Cli::try_parse_from(["mcp-sentinel", "audit", "list"]).unwrap();
+        match cli_list.command {
+            Commands::Audit {
+                action:
+                    AuditCommands::List {
+                        limit,
+                        blocked_only,
+                        event,
+                    },
+            } => {
+                assert_eq!(limit, 50);
+                assert!(!blocked_only);
+                assert_eq!(event, None);
+            }
+            _ => panic!("Expected Commands::Audit::List"),
+        }
+
+        let cli_blocked = Cli::try_parse_from([
+            "mcp-sentinel",
+            "audits",
+            "list",
+            "--limit",
+            "20",
+            "--blocked-only",
+            "--event",
+            "TOOL_BLOCKED",
+        ])
+        .unwrap();
+        match cli_blocked.command {
+            Commands::Audit {
+                action:
+                    AuditCommands::List {
+                        limit,
+                        blocked_only,
+                        event,
+                    },
+            } => {
+                assert_eq!(limit, 20);
+                assert!(blocked_only);
+                assert_eq!(event.as_deref(), Some("TOOL_BLOCKED"));
+            }
+            _ => panic!("Expected Commands::Audit::List"),
+        }
+
+        let cli_clear = Cli::try_parse_from(["mcp-sentinel", "audit", "clear"]).unwrap();
+        assert!(matches!(
+            cli_clear.command,
+            Commands::Audit {
+                action: AuditCommands::Clear
+            }
+        ));
+
+        let cli_status = Cli::try_parse_from(["mcp-sentinel", "audit", "status"]).unwrap();
+        assert!(matches!(
+            cli_status.command,
+            Commands::Audit {
+                action: AuditCommands::Status
+            }
+        ));
+
+        // Test --audit flag on run
+        let cli_run =
+            Cli::try_parse_from(["mcp-sentinel", "run", "--audit", "--", "node", "srv.js"])
+                .unwrap();
+        match cli_run.command {
+            Commands::Run { audit, .. } => assert!(audit),
+            _ => panic!("Expected Commands::Run with audit=true"),
         }
     }
 }

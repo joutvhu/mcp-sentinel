@@ -7,6 +7,8 @@ pub async fn run_child_and_pipe(
     env_vars: HashMap<String, String>,
     redact_secrets: Vec<String>,
     tool_profile: Option<crate::tool_policy::ToolProfile>,
+    audit_enabled: bool,
+    server_name: Option<String>,
 ) -> Result<i32, Box<dyn std::error::Error>> {
     if cmd_args.is_empty() {
         return Err("No command specified to execute".into());
@@ -56,9 +58,11 @@ pub async fn run_child_and_pipe(
     let mut host_stdout = tokio::io::stdout();
     let mut host_stderr = tokio::io::stderr();
 
+    let server_name_clone = server_name.clone();
+
     // Spawn async background tasks for stdin, stdout, stderr forwarding
     let in_task = tokio::spawn(async move {
-        if let Some(profile) = tool_profile {
+        if tool_profile.is_some() || audit_enabled {
             use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
             let mut reader = BufReader::new(host_stdin).lines();
             while let Ok(Some(line)) = reader.next_line().await {
@@ -72,33 +76,81 @@ pub async fn run_child_and_pipe(
                             .and_then(|p| p.get("name"))
                             .and_then(|n| n.as_str())
                         {
-                            let decision =
-                                crate::tool_policy::evaluate_tool_call(tool_name, &profile);
-                            if let crate::tool_policy::ToolDecision::Blocked { reason } = decision {
-                                is_blocked = true;
-                                eprintln!(
-                                    "[mcp-sentinel] Security Alert: Blocked unauthorized tool call '{}' by policy '{}': {}",
-                                    tool_name, profile.name, reason
-                                );
+                            if let Some(ref profile) = tool_profile {
+                                let decision =
+                                    crate::tool_policy::evaluate_tool_call(tool_name, profile);
+                                if let crate::tool_policy::ToolDecision::Blocked { reason } =
+                                    decision
+                                {
+                                    is_blocked = true;
+                                    eprintln!(
+                                        "[mcp-sentinel] Security Alert: Blocked unauthorized tool call '{}' by policy '{}': {}",
+                                        tool_name, profile.name, reason
+                                    );
 
-                                let id = val.get("id").cloned().unwrap_or(serde_json::Value::Null);
-                                let err_resp = serde_json::json!({
-                                    "jsonrpc": "2.0",
-                                    "id": id,
-                                    "error": {
-                                        "code": -32001,
-                                        "message": format!(
-                                            "[MCP-SENTINEL] Tool '{}' is blocked by security policy '{}': {}",
-                                            tool_name, profile.name, reason
-                                        )
+                                    if audit_enabled {
+                                        let _ =
+                                            crate::audit::log_event(&crate::audit::AuditEntry {
+                                                timestamp: chrono::Utc::now(),
+                                                event:
+                                                    crate::audit::AuditEventType::ToolCallBlocked,
+                                                server_name: server_name_clone.clone(),
+                                                command: None,
+                                                tool_name: Some(tool_name.to_string()),
+                                                decision: Some("BLOCKED".to_string()),
+                                                reason: Some(reason.clone()),
+                                                secrets: None,
+                                                profile: Some(profile.name.clone()),
+                                                exit_code: None,
+                                            });
                                     }
-                                });
 
-                                let mut err_bytes = err_resp.to_string();
-                                err_bytes.push('\n');
-                                let mut stdout = tokio::io::stdout();
-                                let _ = stdout.write_all(err_bytes.as_bytes()).await;
-                                let _ = stdout.flush().await;
+                                    let id =
+                                        val.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                                    let err_resp = serde_json::json!({
+                                        "jsonrpc": "2.0",
+                                        "id": id,
+                                        "error": {
+                                            "code": -32001,
+                                            "message": format!(
+                                                "[MCP-SENTINEL] Tool '{}' is blocked by security policy '{}': {}",
+                                                tool_name, profile.name, reason
+                                            )
+                                        }
+                                    });
+
+                                    let mut err_bytes = err_resp.to_string();
+                                    err_bytes.push('\n');
+                                    let mut stdout = tokio::io::stdout();
+                                    let _ = stdout.write_all(err_bytes.as_bytes()).await;
+                                    let _ = stdout.flush().await;
+                                } else if audit_enabled {
+                                    let _ = crate::audit::log_event(&crate::audit::AuditEntry {
+                                        timestamp: chrono::Utc::now(),
+                                        event: crate::audit::AuditEventType::ToolCallAllowed,
+                                        server_name: server_name_clone.clone(),
+                                        command: None,
+                                        tool_name: Some(tool_name.to_string()),
+                                        decision: Some("ALLOWED".to_string()),
+                                        reason: None,
+                                        secrets: None,
+                                        profile: Some(profile.name.clone()),
+                                        exit_code: None,
+                                    });
+                                }
+                            } else if audit_enabled {
+                                let _ = crate::audit::log_event(&crate::audit::AuditEntry {
+                                    timestamp: chrono::Utc::now(),
+                                    event: crate::audit::AuditEventType::ToolCallAllowed,
+                                    server_name: server_name_clone.clone(),
+                                    command: None,
+                                    tool_name: Some(tool_name.to_string()),
+                                    decision: Some("ALLOWED".to_string()),
+                                    reason: None,
+                                    secrets: None,
+                                    profile: None,
+                                    exit_code: None,
+                                });
                             }
                         }
                     }

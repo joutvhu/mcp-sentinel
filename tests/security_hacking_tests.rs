@@ -682,3 +682,132 @@ fn hack_test_layer7_tool_firewall_blocks_destructive_call() {
         stderr
     );
 }
+
+/// HACK ATTACK 16: Security Audit Logging (Default-Off Verification & Zero Secret Leaks)
+/// Tests that:
+/// 1. By default, NO audit.log file is created (Zero-Disk Footprint / Default OFF).
+/// 2. When --audit is provided, security events (SERVER_START, TOOL_ALLOWED, TOOL_BLOCKED, SERVER_EXIT) are captured.
+/// 3. Plaintext secret values are NEVER recorded in the audit log under any circumstances.
+#[test]
+fn hack_test_audit_logging_default_off_and_safe_capture() {
+    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+
+    let config_dir = std::env::temp_dir().join(format!(
+        "mcp_sentinel_audit_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let audit_file = config_dir.join("audit.log");
+
+    let vault_key = "TEST_VAULT_AUDIT_KEY";
+    let raw_secret = "super_confidential_token_999";
+    let _ = mcp_sentinel::vault::set_secret(vault_key, raw_secret);
+
+    let server_script = r#"
+        const readline = require('readline');
+        const rl = readline.createInterface({ input: process.stdin });
+        rl.on('line', (line) => {
+            const req = JSON.parse(line);
+            console.log(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: { done: true } }));
+        });
+    "#;
+
+    // 1. Run WITHOUT --audit -> audit.log MUST NOT exist!
+    let child_no_audit = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_CONFIG_DIR", &config_dir)
+        .env("MCP_SENTINEL_MOCK_DIALOG_RESPONSE", "allow_once")
+        .args([
+            "run",
+            "--secrets",
+            &format!("SECRET_A={}", vault_key),
+            "--",
+            "node",
+            "-e",
+            "console.log('NO_AUDIT_OK');",
+        ])
+        .output()
+        .expect("Failed to run without audit");
+
+    assert!(child_no_audit.status.success());
+    assert!(
+        !audit_file.exists(),
+        "By default, audit.log must NOT be created!"
+    );
+
+    // 2. Run WITH --audit and tool policy
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_CONFIG_DIR", &config_dir)
+        .env("MCP_SENTINEL_MOCK_DIALOG_RESPONSE", "allow_once")
+        .args([
+            "run",
+            "--audit",
+            "--profile",
+            "read-only",
+            "--secrets",
+            &format!("SECRET_A={}", vault_key),
+            "--",
+            "node",
+            "-e",
+            server_script,
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn mcp-sentinel with --audit");
+
+    {
+        use std::io::Write;
+        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+
+        // Send allowed tool call
+        stdin
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"read_data\"}}\n")
+            .unwrap();
+
+        // Send blocked tool call
+        stdin
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"delete_records\"}}\n")
+            .unwrap();
+    }
+
+    let output = child.wait_with_output().expect("Failed to read output");
+    assert!(output.status.success());
+
+    // 3. Verify audit.log exists and contains structured events
+    assert!(
+        audit_file.exists(),
+        "audit.log must exist when --audit is enabled!"
+    );
+
+    let audit_content = std::fs::read_to_string(&audit_file).expect("Failed to read audit.log");
+
+    assert!(
+        audit_content.contains("SERVER_START"),
+        "Must log SERVER_START event!"
+    );
+    assert!(
+        audit_content.contains("TOOL_CALL_ALLOWED") && audit_content.contains("read_data"),
+        "Must log TOOL_CALL_ALLOWED for read_data!"
+    );
+    assert!(
+        audit_content.contains("TOOL_CALL_BLOCKED") && audit_content.contains("delete_records"),
+        "Must log TOOL_CALL_BLOCKED for delete_records!"
+    );
+    assert!(
+        audit_content.contains("SERVER_EXIT"),
+        "Must log SERVER_EXIT event!"
+    );
+
+    // 4. CRITICAL: Secret plaintext MUST NEVER be logged
+    assert!(
+        !audit_content.contains(raw_secret),
+        "CRITICAL SECURITY FAILURE: Plaintext secret was logged into audit.log!"
+    );
+
+    let _ = mcp_sentinel::vault::delete_secret(vault_key);
+    let _ = std::fs::remove_dir_all(&config_dir);
+}

@@ -2,8 +2,10 @@ use clap::Parser;
 use std::collections::HashMap;
 use std::process::exit;
 
-use mcp_sentinel::cli::{Cli, Commands, PermCommands, SecretCommands, ToolPolicyCommands};
-use mcp_sentinel::{dialog, policy, proxy, sanitizer, tool_policy, tui, vault};
+use mcp_sentinel::cli::{
+    AuditCommands, Cli, Commands, PermCommands, SecretCommands, ToolPolicyCommands,
+};
+use mcp_sentinel::{audit, dialog, policy, proxy, sanitizer, tool_policy, tui, vault};
 
 #[tokio::main]
 async fn main() {
@@ -36,12 +38,15 @@ async fn main() {
             profile,
             deny_tools,
             allow_tools,
+            audit,
             cmd,
         } => {
             if cmd.is_empty() {
                 eprintln!("[mcp-sentinel] Error: No command specified to run.");
                 exit(1);
             }
+
+            let audit_enabled = audit::is_audit_enabled(audit);
 
             // Parse and validate all secret mappings
             let mappings = match vault::parse_specs(&secrets) {
@@ -73,12 +78,43 @@ async fn main() {
                         eprintln!(
                             "[mcp-sentinel] Security Error: Access to secrets denied by user or timed out."
                         );
+
+                        if audit_enabled {
+                            let _ = audit::log_event(&audit::AuditEntry {
+                                timestamp: chrono::Utc::now(),
+                                event: audit::AuditEventType::TofuDecision,
+                                server_name: Some(display_name.clone()),
+                                command: Some(cmd.join(" ")),
+                                tool_name: None,
+                                decision: Some("DENY".to_string()),
+                                reason: Some("User rejected authorization prompt".to_string()),
+                                secrets: Some(canonical_specs.clone()),
+                                profile: profile.clone(),
+                                exit_code: None,
+                            });
+                        }
+
                         exit(1);
                     }
                     dialog::AuthDecision::AllowOnce => {
                         eprintln!(
                             "[mcp-sentinel] Permission granted for this session only (Allow Once). Will prompt again on next launch."
                         );
+
+                        if audit_enabled {
+                            let _ = audit::log_event(&audit::AuditEntry {
+                                timestamp: chrono::Utc::now(),
+                                event: audit::AuditEventType::TofuDecision,
+                                server_name: Some(display_name.clone()),
+                                command: Some(cmd.join(" ")),
+                                tool_name: None,
+                                decision: Some("ALLOW_ONCE".to_string()),
+                                reason: None,
+                                secrets: Some(canonical_specs.clone()),
+                                profile: profile.clone(),
+                                exit_code: None,
+                            });
+                        }
                     }
                     dialog::AuthDecision::AllowAlways => {
                         if allow_once {
@@ -96,6 +132,25 @@ async fn main() {
                             eprintln!(
                                 "[mcp-sentinel] Permission granted and saved for future sessions."
                             );
+                        }
+
+                        if audit_enabled {
+                            let _ = audit::log_event(&audit::AuditEntry {
+                                timestamp: chrono::Utc::now(),
+                                event: audit::AuditEventType::TofuDecision,
+                                server_name: Some(display_name.clone()),
+                                command: Some(cmd.join(" ")),
+                                tool_name: None,
+                                decision: Some(if allow_once {
+                                    "ALLOW_ONCE".to_string()
+                                } else {
+                                    "ALLOW_ALWAYS".to_string()
+                                }),
+                                reason: None,
+                                secrets: Some(canonical_specs.clone()),
+                                profile: profile.clone(),
+                                exit_code: None,
+                            });
                         }
                     }
                 }
@@ -164,13 +219,66 @@ async fn main() {
                 }
             }
 
+            // Audit: Log Server Start
+            if audit_enabled {
+                let _ = audit::log_event(&audit::AuditEntry {
+                    timestamp: chrono::Utc::now(),
+                    event: audit::AuditEventType::ServerStart,
+                    server_name: Some(display_name.clone()),
+                    command: Some(cmd.join(" ")),
+                    tool_name: None,
+                    decision: None,
+                    reason: None,
+                    secrets: Some(canonical_specs.clone()),
+                    profile: effective_tool_profile.as_ref().map(|p| p.name.clone()),
+                    exit_code: None,
+                });
+            }
+
             // 6. Run proxy supervisor
-            match proxy::run_child_and_pipe(&cmd, clean_env, redact_secrets, effective_tool_profile)
-                .await
+            match proxy::run_child_and_pipe(
+                &cmd,
+                clean_env,
+                redact_secrets,
+                effective_tool_profile,
+                audit_enabled,
+                Some(display_name.clone()),
+            )
+            .await
             {
-                Ok(code) => exit(code),
+                Ok(code) => {
+                    if audit_enabled {
+                        let _ = audit::log_event(&audit::AuditEntry {
+                            timestamp: chrono::Utc::now(),
+                            event: audit::AuditEventType::ServerExit,
+                            server_name: Some(display_name),
+                            command: Some(cmd.join(" ")),
+                            tool_name: None,
+                            decision: None,
+                            reason: None,
+                            secrets: None,
+                            profile: None,
+                            exit_code: Some(code),
+                        });
+                    }
+                    exit(code);
+                }
                 Err(e) => {
                     eprintln!("[mcp-sentinel] Execution error: {}", e);
+                    if audit_enabled {
+                        let _ = audit::log_event(&audit::AuditEntry {
+                            timestamp: chrono::Utc::now(),
+                            event: audit::AuditEventType::ServerExit,
+                            server_name: Some(display_name),
+                            command: Some(cmd.join(" ")),
+                            tool_name: None,
+                            decision: None,
+                            reason: Some(format!("Error: {}", e)),
+                            secrets: None,
+                            profile: None,
+                            exit_code: Some(1),
+                        });
+                    }
                     exit(1);
                 }
             }
@@ -389,6 +497,124 @@ async fn main() {
                 },
             }
         }
+
+        Commands::Audit { action } => match action {
+            AuditCommands::List {
+                limit,
+                blocked_only,
+                event,
+            } => {
+                let event_filter = if let Some(ref e_str) = event {
+                    match e_str.parse::<audit::AuditEventType>() {
+                        Ok(ev) => Some(ev),
+                        Err(err) => {
+                            eprintln!("Error: {}", err);
+                            exit(1);
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                match audit::read_entries(limit, event_filter, blocked_only) {
+                    Ok(entries) => {
+                        if entries.is_empty() {
+                            println!("No audit log events found.");
+                            println!("Tip: Enable audit logging using 'mcp-sentinel run --audit -- <COMMAND>' or set MCP_SENTINEL_AUDIT=1.");
+                            return;
+                        }
+
+                        println!(
+                            "{:<20} {:<15} {:<18} {:<22} {:<10} {:<24}",
+                            "TIMESTAMP (UTC)", "EVENT", "SERVER", "TOOL", "DECISION", "DETAIL"
+                        );
+                        println!("{:-<112}", "");
+
+                        for entry in entries {
+                            let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
+                            let srv = entry.server_name.unwrap_or_else(|| "-".to_string());
+                            let tool = entry.tool_name.unwrap_or_else(|| "-".to_string());
+                            let dec = entry.decision.unwrap_or_else(|| "-".to_string());
+                            let detail = if let Some(code) = entry.exit_code {
+                                format!("Exit Code: {}", code)
+                            } else if let Some(r) = entry.reason {
+                                r
+                            } else if let Some(secs) = entry.secrets {
+                                format!("Secrets: {}", secs.join(","))
+                            } else {
+                                "-".to_string()
+                            };
+
+                            let srv_short = if srv.len() > 16 {
+                                format!("{}...", &srv[..13])
+                            } else {
+                                srv
+                            };
+
+                            let tool_short = if tool.len() > 20 {
+                                format!("{}...", &tool[..17])
+                            } else {
+                                tool
+                            };
+
+                            let detail_short = if detail.len() > 23 {
+                                format!("{}...", &detail[..20])
+                            } else {
+                                detail
+                            };
+
+                            println!(
+                                "{:<20} {:<15} {:<18} {:<22} {:<10} {:<24}",
+                                ts, entry.event, srv_short, tool_short, dec, detail_short
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error reading audit log: {}", e);
+                        exit(1);
+                    }
+                }
+            }
+            AuditCommands::Clear => match audit::clear_log() {
+                Ok(true) => println!("✓ Security audit log cleared successfully."),
+                Ok(false) => println!("Audit log was already empty or not present."),
+                Err(e) => {
+                    eprintln!("Error clearing audit log: {}", e);
+                    exit(1);
+                }
+            },
+            AuditCommands::Status => match audit::get_audit_status() {
+                Ok(status) => {
+                    println!("Security Audit Subsystem Status:");
+                    println!("  Default State:     Disabled (Zero-Disk Footprint / Opt-in)");
+                    println!(
+                        "  Active via Env:    {}",
+                        if status.is_env_enabled {
+                            "Yes (MCP_SENTINEL_AUDIT is set)"
+                        } else {
+                            "No"
+                        }
+                    );
+                    println!("  Log File Path:     {}", status.log_path.display());
+                    println!(
+                        "  File Exists:       {}",
+                        if status.log_exists { "Yes" } else { "No" }
+                    );
+                    println!("  Total Entries:     {}", status.total_entries);
+                    println!(
+                        "  File Size:         {:.2} KB",
+                        status.file_size_bytes as f64 / 1024.0
+                    );
+                    println!(
+                        "\nTip: Enable auditing per-session with 'mcp-sentinel run --audit -- <COMMAND>'."
+                    );
+                }
+                Err(e) => {
+                    eprintln!("Error retrieving audit status: {}", e);
+                    exit(1);
+                }
+            },
+        },
 
         Commands::Ui => {
             if let Err(e) = tui::run_tui() {

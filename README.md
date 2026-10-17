@@ -1,7 +1,7 @@
 # 🛡️ MCP Sentinel
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-76%2F76%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-81%2F81%20passing-brightgreen.svg)](tests/)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 [![Security](https://img.shields.io/badge/security-Zero--Trust%20%7C%20HMAC--SHA256-orange.svg)](#security-guarantees)
 
@@ -282,6 +282,7 @@ mcp-sentinel run [OPTIONS] -- <COMMAND> [ARGS]...
 - `--allow-tools <PATS>`: Comma-separated allowed tool patterns with wildcard support (e.g., `read_*,get_*,list_*`).
 - `--deny-tools <PATS>`: Comma-separated denied tool patterns with wildcard support (e.g., `*drop*,*delete*,*destroy*`). Strictly overrides allow patterns.
 - `--no-redact`: Disable automatic Data Loss Prevention (DLP) secret masking on stdout. By default, Sentinel transparently redacts any authorized secrets echoed by the child process into `[REDACTED_BY_SENTINEL]`.
+- `--audit`: Enable structured security audit logging for this session. **Default is OFF (opt-in)** for zero disk footprint and maximum privacy. Can also be enabled via environment variable `MCP_SENTINEL_AUDIT=1` or `MCP_SENTINEL_AUDIT=true`.
 - `--name <NAME>`: Friendly display name shown in authorization prompts.
 - `-- <COMMAND>`: Command and arguments of the target MCP server.
 
@@ -340,6 +341,32 @@ mcp-sentinel profile set db-analyst \
 
 # Delete a custom profile (built-in presets are protected)
 mcp-sentinel profile delete <NAME>
+```
+
+### `mcp-sentinel audit` (alias: `audits`)
+
+Inspect and manage structured security audit logs. Audit logging is **Default OFF (opt-in)** and records events in JSON-Lines format with automatic 5MB log rotation.
+
+> 🔒 **Security & Privacy Guarantee**: Audit logs **NEVER** record plaintext secret values under any circumstances (only secret key names are logged).
+
+```bash
+# List recent audit events in a formatted table
+mcp-sentinel audit list
+
+# View the last 50 events
+mcp-sentinel audit list --limit 50
+
+# Filter only blocked security events (blocked tool calls)
+mcp-sentinel audit list --blocked-only
+
+# Filter by specific event type (SERVER_START, TOOL_CALL_BLOCKED, TOFU_DECISION, etc.)
+mcp-sentinel audit list --event TOOL_CALL_BLOCKED
+
+# Check audit logging status, log file location, and entry counts
+mcp-sentinel audit status
+
+# Purge audit log history safely
+mcp-sentinel audit clear
 ```
 
 ### `mcp-sentinel migrate`
@@ -408,10 +435,11 @@ mcp-sentinel ui
 6. **UI Spoofing Defense**: The native authorization dialog collapses newlines and limits text lengths to prevent line-breaking and visual truncation attacks.
 7. **Hardware-Backed CSPRNG**: The master signing key is generated via native OS entropy (`rand::rngs::OsRng`), ensuring cryptographic unpredictability.
 8. **Layer 7 JSON-RPC Tool Firewall**: Intercepts `tools/call` requests on child process `stdin`. If an LLM or user attempts to call a tool blocked by the active profile or `--deny-tools` pattern, `mcp-sentinel` synthesizes a JSON-RPC `-32001` error response back to the host IDE, alerts `stderr`, and completely drops the request from reaching the child process.
-9. **Verified by 76 Automated Tests across 5 Suites**:
-   - **Unit Tests (43 tests)**: Vault operations, alias mapping & validation, fingerprint collision resistance, HMAC signing & tamper rejection for policies and tool profiles, wildcard pattern evaluation, environment sanitizer whitelist, dialog text sanitization, interactive TUI navigation and state management, stream-boundary DLP redaction, and Allow Once ephemeral grants.
+9. **Opt-in Structured Audit Trail**: When enabled via `--audit` or `MCP_SENTINEL_AUDIT=1`, captures structured security events (`SERVER_START`, `TOOL_CALL_ALLOWED`, `TOOL_CALL_BLOCKED`, `TOFU_DECISION`, `SERVER_EXIT`) in JSON-Lines format. Default is OFF (zero disk footprint). Plaintext secret values are strictly stripped and never logged, and logs rotate automatically at 5MB.
+10. **Verified by 81 Automated Tests across 5 Suites**:
+   - **Unit Tests (47 tests)**: Vault operations, alias mapping & validation, fingerprint collision resistance, HMAC signing & tamper rejection for policies and tool profiles, wildcard pattern evaluation, environment sanitizer whitelist, dialog text sanitization, interactive TUI navigation and state management, stream-boundary DLP redaction, Allow Once ephemeral grants, and structured audit entry serialization.
    - **Integration Tests (8 tests)**: Subprocess execution, CLI parsing, exit code propagation, secret list, permissions list, TUI launch commands, and full migration workflow.
-   - **Security Penetration Tests (15 tests)**: Host environment variable exfiltration blocked, command injection (`;&|`) neutralized, forged permission injection rejected, argument smuggling intercepted, child process sandbox recursion blocked, reserved key name rejection, alias tamper resistance, stdout DLP secret masking, Allow Once non-persistence, and Layer 7 tool call firewall drop & error synthesis.
+   - **Security Penetration Tests (16 tests)**: Host environment variable exfiltration blocked, command injection (`;&|`) neutralized, forged permission injection rejected, argument smuggling intercepted, child process sandbox recursion blocked, reserved key name rejection, alias tamper resistance, stdout DLP secret masking, Allow Once non-persistence, Layer 7 tool call firewall drop & error synthesis, and audit log default-off & secret leak immunity.
    - **Stress Tests (6 tests)**: 100-secret bulk injection, corrupted policy resilience, Unicode & Vietnamese character preservation, stdio separation.
    - **Performance Benchmarks (4 tests)**: High-load async stdio streaming (~26,000 JSON-RPC msgs/sec), multithreaded SHA-256 hashing (~320,000 ops/sec).
 
