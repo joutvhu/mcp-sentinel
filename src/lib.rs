@@ -1,5 +1,6 @@
 pub mod cli;
 pub mod dialog;
+pub mod migrate;
 pub mod platform;
 pub mod policy;
 pub mod proxy;

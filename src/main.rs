@@ -207,5 +207,69 @@ async fn main() {
                 exit(1);
             }
         }
+
+        Commands::Migrate {
+            target,
+            file,
+            dry_run,
+            no_backup,
+        } => {
+            let files_to_migrate = if let Some(custom_file) = file {
+                vec![custom_file]
+            } else {
+                let t = target.unwrap_or(mcp_sentinel::migrate::MigrateTarget::All);
+                let discovered = mcp_sentinel::migrate::find_config_paths(t);
+                if discovered.is_empty() {
+                    println!(
+                        "[mcp-sentinel] No standard MCP configuration files found for target '{:?}'.",
+                        t
+                    );
+                    println!(
+                        "Tip: Specify the file directly using: mcp-sentinel migrate --file <PATH>"
+                    );
+                    return;
+                }
+                discovered
+            };
+
+            if dry_run {
+                println!("🔍 Running migration in DRY-RUN mode (no changes will be applied)...\n");
+            }
+
+            for path in files_to_migrate {
+                println!("📦 Migrating: {}", path.display());
+                match mcp_sentinel::migrate::migrate_file(&path, dry_run, no_backup) {
+                    Ok(report) => {
+                        if let Some(bak) = report.backup_path {
+                            println!("   📄 Created backup at: {}", bak.display());
+                        }
+                        for res in report.results {
+                            if res.already_migrated {
+                                println!(
+                                    "   ⏭️  [{}] Already migrated with mcp-sentinel.",
+                                    res.server_name
+                                );
+                            } else {
+                                println!("   ✅ [{}] {}", res.server_name, res.status);
+                                for sec in res.extracted_secrets {
+                                    println!("      🔑 Stored secret '{}' in Keyring", sec);
+                                }
+                            }
+                        }
+                        println!();
+                    }
+                    Err(e) => {
+                        eprintln!("   ❌ Failed to migrate '{}': {}", path.display(), e);
+                    }
+                }
+            }
+            if dry_run {
+                println!("✨ Dry run complete! Run without '--dry-run' to execute the migration.");
+            } else {
+                println!(
+                    "🎉 Migration complete! Your MCP servers are now protected with Zero-Trust."
+                );
+            }
+        }
     }
 }

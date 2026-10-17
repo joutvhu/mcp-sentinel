@@ -1,7 +1,7 @@
 # 🛡️ MCP Sentinel
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-52%2F52%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-59%2F59%20passing-brightgreen.svg)](tests/)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 [![Security](https://img.shields.io/badge/security-Zero--Trust%20%7C%20HMAC--SHA256-orange.svg)](#security-guarantees)
 
@@ -296,6 +296,29 @@ mcp-sentinel permissions revoke <FINGERPRINT_HEX>
 # Reset and purge all stored permissions
 mcp-sentinel permissions reset
 ```
+
+### `mcp-sentinel migrate`
+
+Automatically scan and migrate existing plaintext MCP configuration files (`claude_desktop_config.json`, `mcp.json`) to Zero-Trust architecture. Extracts secrets into the OS Keyring, removes plaintext credentials from disk, and wraps commands with `mcp-sentinel`.
+
+```bash
+# Auto-detect and migrate all Claude and Cursor MCP configurations
+mcp-sentinel migrate
+
+# Target a specific application
+mcp-sentinel migrate claude
+mcp-sentinel migrate cursor
+
+# Migrate a custom configuration file
+mcp-sentinel migrate --file /path/to/claude_desktop_config.json
+
+# Preview migration without modifying files or OS vault
+mcp-sentinel migrate --dry-run
+```
+
+- Automatically generates a `.bak` backup file before overwriting.
+- Safely resolves naming collisions by automatically generating isolated secret aliases.
+- Skips servers that are already protected by `mcp-sentinel`.
 
 ### `mcp-sentinel ui` (alias: `tui`, `dashboard`)
 

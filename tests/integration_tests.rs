@@ -85,3 +85,94 @@ fn test_cli_secret_list() {
 
     assert!(output_plural.status.success());
 }
+
+#[test]
+fn test_cli_migrate_help() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args(["migrate", "--help"])
+        .output()
+        .expect("Failed to execute mcp-sentinel migrate --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Migrate existing plaintext MCP configurations"));
+    assert!(stdout.contains("--dry-run"));
+    assert!(stdout.contains("--file"));
+}
+
+#[test]
+fn test_cli_migrate_file_end_to_end() {
+    use std::fs;
+    let temp_dir = std::env::temp_dir().join(format!("mcp_test_migrate_{}", std::process::id()));
+    let _ = fs::create_dir_all(&temp_dir);
+    let config_file = temp_dir.join("test_mcp_config.json");
+
+    let initial_content = r#"{
+        "mcpServers": {
+            "test_sqlite": {
+                "command": "python",
+                "args": ["-m", "sqlite_server"],
+                "env": {
+                    "SQLITE_DB_KEY": "sqlite_secret_token_123"
+                }
+            }
+        }
+    }"#;
+    fs::write(&config_file, initial_content).unwrap();
+
+    // 1. Dry run
+    let output_dry = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args([
+            "migrate",
+            "--file",
+            config_file.to_str().unwrap(),
+            "--dry-run",
+        ])
+        .output()
+        .expect("Failed to run migrate --dry-run");
+
+    assert!(output_dry.status.success());
+    let stdout_dry = String::from_utf8_lossy(&output_dry.stdout);
+    assert!(stdout_dry.contains("DRY-RUN mode"));
+    assert!(stdout_dry.contains("test_sqlite"));
+
+    // File content should remain unchanged after dry-run
+    let content_after_dry = fs::read_to_string(&config_file).unwrap();
+    assert_eq!(content_after_dry, initial_content);
+
+    // 2. Real migration
+    let output_real = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args(["migrate", "--file", config_file.to_str().unwrap()])
+        .output()
+        .expect("Failed to run migrate");
+
+    assert!(output_real.status.success());
+    let stdout_real = String::from_utf8_lossy(&output_real.stdout);
+    assert!(stdout_real.contains("Created backup at"));
+    assert!(stdout_real.contains("Migration complete"));
+
+    // Check backup file exists
+    let backup_file = temp_dir.join("test_mcp_config.json.bak");
+    assert!(backup_file.exists());
+    assert_eq!(fs::read_to_string(&backup_file).unwrap(), initial_content);
+
+    // Check migrated content
+    let content_migrated = fs::read_to_string(&config_file).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content_migrated).unwrap();
+    let server = &parsed["mcpServers"]["test_sqlite"];
+    assert_eq!(server["command"], "mcp-sentinel");
+    assert!(server.get("env").is_none());
+
+    let args = server["args"].as_array().unwrap();
+    assert_eq!(args[0], "run");
+    assert_eq!(args[1], "--name");
+    assert_eq!(args[2], "test_sqlite MCP Server");
+    assert_eq!(args[3], "--secrets");
+    assert_eq!(args[4], "SQLITE_DB_KEY");
+
+    // Clean up
+    let _ = fs::remove_file(&config_file);
+    let _ = fs::remove_file(&backup_file);
+    let _ = fs::remove_dir(&temp_dir);
+    let _ = mcp_sentinel::vault::delete_secret("SQLITE_DB_KEY");
+}

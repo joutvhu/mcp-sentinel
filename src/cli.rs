@@ -47,6 +47,25 @@ pub enum Commands {
     /// Launch the interactive Terminal User Interface (TUI) Dashboard
     #[command(alias = "tui", alias = "dashboard")]
     Ui,
+
+    /// Migrate existing plaintext MCP configurations to Zero-Trust vault
+    Migrate {
+        /// Target application to migrate (claude, cursor, all)
+        #[arg(value_enum)]
+        target: Option<crate::migrate::MigrateTarget>,
+
+        /// Path to a specific MCP configuration file to migrate
+        #[arg(short, long)]
+        file: Option<std::path::PathBuf>,
+
+        /// Dry-run mode: display planned changes without modifying vault or files
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip creating a .bak backup file
+        #[arg(long)]
+        no_backup: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -235,5 +254,58 @@ mod tests {
 
         let cli_dash = Cli::try_parse_from(["mcp-sentinel", "dashboard"]).unwrap();
         assert!(matches!(cli_dash.command, Commands::Ui));
+    }
+
+    #[test]
+    fn test_parse_migrate_command() {
+        // Default target
+        let cli_default = Cli::try_parse_from(["mcp-sentinel", "migrate"]).unwrap();
+        match cli_default.command {
+            Commands::Migrate {
+                target,
+                file,
+                dry_run,
+                no_backup,
+            } => {
+                assert_eq!(target, None);
+                assert_eq!(file, None);
+                assert!(!dry_run);
+                assert!(!no_backup);
+            }
+            _ => panic!("Expected Commands::Migrate"),
+        }
+
+        // Specific target and flags
+        let cli_claude = Cli::try_parse_from([
+            "mcp-sentinel",
+            "migrate",
+            "claude",
+            "--dry-run",
+            "--no-backup",
+        ])
+        .unwrap();
+        match cli_claude.command {
+            Commands::Migrate {
+                target,
+                dry_run,
+                no_backup,
+                ..
+            } => {
+                assert_eq!(target, Some(crate::migrate::MigrateTarget::Claude));
+                assert!(dry_run);
+                assert!(no_backup);
+            }
+            _ => panic!("Expected Commands::Migrate"),
+        }
+
+        // Custom file
+        let cli_file =
+            Cli::try_parse_from(["mcp-sentinel", "migrate", "--file", "my_config.json"]).unwrap();
+        match cli_file.command {
+            Commands::Migrate { file, .. } => {
+                assert_eq!(file, Some(std::path::PathBuf::from("my_config.json")));
+            }
+            _ => panic!("Expected Commands::Migrate"),
+        }
     }
 }
