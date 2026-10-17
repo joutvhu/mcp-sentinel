@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] - 2026-10-18
+
+### 🚀 Major Feature Release: L7 Tool Call Firewall, Config Migration & DLP
+
+This release introduces comprehensive Layer 7 tool call interception, automated client configuration migration, real-time data loss prevention (DLP), opt-in security audit logging, and a modular high-performance TUI with dual-build release options.
+
+### ✨ New Features & Capabilities
+
+- **Automated Configuration Migration (`mcp-sentinel migrate`):**
+  - One-click discovery and migration of raw plaintext secrets in Claude Desktop (`claude_desktop_config.json`) and Cursor (`mcp.json`).
+  - Safely extracts credentials directly into the OS-backed hardware keyring and rewrites server configs to invoke `mcp-sentinel run`.
+  - Supports `--dry-run` inspection and automatic `.bak` backup creation.
+
+- **Layer 7 Tool Call Firewall & Security Policies (`mcp-sentinel tool-policy`):**
+  - In-stream inspection of JSON-RPC `tools/call` invocations on `stdin`.
+  - Reusable security profiles with whitelist (`allow`) and priority blacklist (`deny`) pattern matching.
+  - Built-in presets:
+    - `read-only`: Whitelists read/query/list/get operations; strictly drops mutating or executing tool calls.
+    - `no-destructive`: Allows general execution while blacklisting high-risk tools matching `*delete*`, `*drop*`, `*remove*`, `*destroy*`, `*terminate*`.
+  - JSON-RPC specification compliant: dropped calls return standard JSON-RPC error `-32003` (Tool Execution Denied) without terminating the server.
+
+- **Data Loss Prevention (DLP) & Stream-Level Secret Redaction:**
+  - Real-time scanning and masking of secrets leaking onto `stdout` using high-throughput Aho-Corasick matching.
+  - Suffix-prefix boundary buffer guarantees detection even when a secret is fragmented across TCP/pipe chunk borders.
+  - Can be bypassed via `--no-redact` when verbatim stream transmission is explicitly required.
+
+- **Ephemeral "Allow Once" Consent:**
+  - Native TOFU dialog now offers three choices: `[Allow Always]`, `[Allow Once]`, and `[Deny]`.
+  - "Allow Once" grants in-memory access for the current session only without persisting authorization to `permissions.json`.
+  - CLI flag `--allow-once` enforces ephemeral permissions even for pre-authorized servers.
+
+- **Security Audit Logging (`mcp-sentinel audit`):**
+  - Opt-in cryptographic security audit trail recorded to `~/.mcp-sentinel/audit.log`.
+  - Tracks all credential accesses, user TOFU decisions, L7 tool firewall drops, and migration events.
+  - Default-off for zero disk footprint; easily managed via `audit enable`, `audit disable`, `audit tail`, and `audit status`.
+
+- **Flexible Secret Aliasing:**
+  - Support for environment variable mapping syntax: `--secrets TARGET_VAR=VAULT_KEY`.
+  - Allows multiple servers to share a single vault secret under differing environment variable names without duplicating secrets.
+
+- **Modular TUI Dashboard & Enhanced UX (`mcp-sentinel ui`):**
+  - Refactored monolithic TUI into clean, maintainable submodules under `src/tui/`.
+  - Three-column intuitive navigation (`Sidebar` -> `Content` -> `Detail Pane`).
+  - Native mouse wheel and trackpad scrolling across all panels and popups.
+  - Full-detail modal view (`Enter` or `v`) for inspecting extensive tool policies and grant specifications on small terminals.
+  - Responsive layout dynamically auto-hiding header banners on compact screens (<12 rows).
+
+- **Dual-Build Packaging (Standard & Headless Editions):**
+  - Added optional `tui` Cargo feature flag: `--no-default-features` builds a micro-binary without GUI/TUI dependencies.
+  - Automated dual-release GitHub Actions CI/CD publishing both `mcp-sentinel` (Full with TUI) and `mcp-sentinel-headless` (Micro-binary).
+  - One-line install scripts (`install.ps1`, `install.sh`) now support `-Headless` / `--headless`.
+
+### 🛡️ Test Coverage & Quality
+- **81/81 automated tests passing** across Unit, Integration, Performance, Security Hacking, and Stress test suites.
+- 0 compiler warnings, 0 clippy warnings, 100% rustfmt compliant.
+
+---
+
 ## [1.0.0] - 2026-10-17
 
 ### 🚀 Initial Stable Production Release
