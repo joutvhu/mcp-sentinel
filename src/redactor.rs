@@ -34,17 +34,28 @@ pub struct StreamRedactor {
 
 impl StreamRedactor {
     pub fn new(secrets: &[String]) -> Self {
-        let valid_secrets: Vec<Vec<u8>> = secrets
-            .iter()
-            .filter(|s| {
-                let trimmed = s.trim();
-                trimmed.len() >= MIN_SECRET_LEN
-                    && !COMMON_NON_SECRETS.contains(&trimmed.to_lowercase().as_str())
-            })
-            .map(|s| s.as_bytes().to_vec())
-            .collect();
+        let mut patterns: Vec<Vec<u8>> = Vec::new();
 
-        if valid_secrets.is_empty() {
+        for s in secrets {
+            let trimmed = s.trim();
+            if trimmed.len() >= MIN_SECRET_LEN
+                && !COMMON_NON_SECRETS.contains(&trimmed.to_lowercase().as_str())
+            {
+                patterns.push(trimmed.as_bytes().to_vec());
+
+                // Also generate JSON-escaped representation (e.g., quotes -> \", newlines -> \n)
+                if let Ok(json_escaped) = serde_json::to_string(trimmed) {
+                    if json_escaped.len() >= 2 {
+                        let inner = &json_escaped[1..json_escaped.len() - 1];
+                        if inner.as_bytes() != trimmed.as_bytes() && inner.len() >= MIN_SECRET_LEN {
+                            patterns.push(inner.as_bytes().to_vec());
+                        }
+                    }
+                }
+            }
+        }
+
+        if patterns.is_empty() {
             return Self {
                 ac: None,
                 patterns: Vec::new(),
@@ -53,12 +64,12 @@ impl StreamRedactor {
             };
         }
 
-        let ac = AhoCorasick::new(&valid_secrets).ok();
-        let replacements = vec![REDACTED_MARKER; valid_secrets.len()];
+        let ac = AhoCorasick::new(&patterns).ok();
+        let replacements = vec![REDACTED_MARKER; patterns.len()];
 
         Self {
             ac,
-            patterns: valid_secrets,
+            patterns,
             replacements,
             carryover: Vec::new(),
         }
@@ -270,5 +281,18 @@ mod tests {
             output_str,
             "Prefix text... [REDACTED_BY_SENTINEL] suffix text"
         );
+    }
+
+    #[test]
+    fn test_redactor_masks_json_escaped_secret() {
+        let secret_with_quote = "secret\"token\"123".to_string();
+        let redactor = StreamRedactor::new(&[secret_with_quote]);
+        assert!(redactor.is_active());
+
+        // In JSON output, quotes are escaped as \"
+        let json_input = br#"{"data": "secret\"token\"123"}"#;
+        let output = redactor.redact_bytes(json_input);
+        let output_str = String::from_utf8(output).unwrap();
+        assert_eq!(output_str, r#"{"data": "[REDACTED_BY_SENTINEL]"}"#);
     }
 }

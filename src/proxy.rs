@@ -293,19 +293,28 @@ pub async fn run_child_and_pipe(
     let err_task = tokio::spawn(async move {
         let _ = tokio::io::copy(&mut child_stderr, &mut host_stderr).await;
     });
-
-    // Wait for the child process to exit with a 5-second graceful timeout once input terminates
-    let status = match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
-        Ok(res) => res?,
-        Err(_) => {
-            eprintln!("[mcp-sentinel] Child process did not exit within timeout. Terminating...");
-            let _ = child.kill().await;
-            child.wait().await?
+    // We wait for EITHER:
+    // 1. The child process exits on its own (child.wait() completes).
+    // 2. OR host STDIN reaches EOF (in_task finishes). Once STDIN closes, we give the child
+    //    a graceful 5-second timeout to exit before sending kill.
+    let status = tokio::select! {
+        res = child.wait() => {
+            res?
+        }
+        _ = in_task => {
+            // STDIN closed by client. Give child 5 seconds to gracefully exit
+            match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
+                Ok(res) => res?,
+                Err(_) => {
+                    eprintln!("[mcp-sentinel] Child process did not exit within 5s after STDIN closed. Terminating...");
+                    let _ = child.kill().await;
+                    child.wait().await?
+                }
+            }
         }
     };
 
-    // Close in_task, join stdout & stderr tasks
-    in_task.abort();
+    // Join remaining forwarding tasks
     let _ = out_task.await;
     let _ = stdout_writer_task.await;
     let _ = err_task.await;

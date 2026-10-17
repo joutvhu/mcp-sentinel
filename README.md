@@ -1,7 +1,7 @@
 # 🛡️ MCP Sentinel
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-85%2F85%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-86%2F86%20passing-brightgreen.svg)](tests/)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 [![Security](https://img.shields.io/badge/security-Zero--Trust%20%7C%20HMAC--SHA256-orange.svg)](#security-guarantees)
 

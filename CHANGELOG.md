@@ -71,7 +71,7 @@ This release introduces comprehensive Layer 7 tool call interception, automated 
 - **Case-Preserving Config Migration**: Preserved camelCase env keys and added leading underscore sanitization for numeric names during `mcp-sentinel migrate`.
 
 ### 🛡️ Test Coverage & Quality
-- **85/85 automated tests passing** across Unit, Integration, Performance, Security Hacking, and Stress test suites.
+- **86/86 automated tests passing** across Unit, Integration, Performance, Security Hacking, and Stress test suites.
 - 0 compiler warnings, 0 clippy warnings, 100% rustfmt compliant.
 
 ---
