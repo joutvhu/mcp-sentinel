@@ -30,10 +30,35 @@ pub struct PolicyFile {
 
 static MASTER_KEY_CACHE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
 
-fn get_master_key_file_path() -> Option<PathBuf> {
-    let base_dirs = BaseDirs::new()?;
+pub fn get_config_dir() -> Result<PathBuf, String> {
+    if let Ok(custom) = std::env::var("MCP_SENTINEL_CONFIG_DIR") {
+        let dir = PathBuf::from(custom);
+        let _ = fs::create_dir_all(&dir);
+        return Ok(dir);
+    }
+    let base_dirs = BaseDirs::new().ok_or("Failed to determine system home/config directory")?;
     let config_dir = base_dirs.config_dir().join("mcp-sentinel");
-    let _ = fs::create_dir_all(&config_dir);
+    if !config_dir.exists() {
+        fs::create_dir_all(&config_dir).map_err(|e| {
+            format!(
+                "Failed to create config dir {}: {}",
+                config_dir.display(),
+                e
+            )
+        })?;
+
+        // Layer 1: Restrict directory permissions to 0700 on Unix (owner access only)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o700));
+        }
+    }
+    Ok(config_dir)
+}
+
+fn get_master_key_file_path() -> Option<PathBuf> {
+    let config_dir = get_config_dir().ok()?;
     Some(config_dir.join(".master_key"))
 }
 
@@ -44,15 +69,7 @@ pub fn get_or_create_master_key() -> Result<Vec<u8>, String> {
         return Ok(key.clone());
     }
 
-    // 1. Try retrieving from OS Keyring first
-    if let Ok(hex_str) = crate::vault::get_secret(MASTER_SIGNING_KEY_NAME) {
-        if let Ok(bytes) = hex::decode(&hex_str) {
-            let _ = MASTER_KEY_CACHE.set(bytes.clone());
-            return Ok(bytes);
-        }
-    }
-
-    // 2. Fallback to protected local key file (for headless/CI where Keyring daemon is absent)
+    // 1. Try local protected fallback file first (instant, non-blocking, cross-process deterministic)
     if let Some(key_path) = get_master_key_file_path() {
         if key_path.exists() {
             if let Ok(hex_str) = fs::read_to_string(&key_path) {
@@ -61,6 +78,23 @@ pub fn get_or_create_master_key() -> Result<Vec<u8>, String> {
                     return Ok(bytes);
                 }
             }
+        }
+    }
+
+    // 2. Try retrieving from OS Keyring
+    if let Ok(hex_str) = crate::vault::get_secret(MASTER_SIGNING_KEY_NAME) {
+        if let Ok(bytes) = hex::decode(&hex_str) {
+            // Also mirror to local fallback file with 0600 mode for child processes
+            if let Some(key_path) = get_master_key_file_path() {
+                let _ = fs::write(&key_path, &hex_str);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600));
+                }
+            }
+            let _ = MASTER_KEY_CACHE.set(bytes.clone());
+            return Ok(bytes);
         }
     }
 
@@ -103,24 +137,7 @@ pub fn compute_grants_hmac(grants: &HashMap<String, Grant>, key: &[u8]) -> Strin
 }
 
 pub fn get_policy_file_path() -> Result<PathBuf, String> {
-    let base_dirs = BaseDirs::new().ok_or("Failed to determine system home/config directory")?;
-    let config_dir = base_dirs.config_dir().join("mcp-sentinel");
-    if !config_dir.exists() {
-        fs::create_dir_all(&config_dir).map_err(|e| {
-            format!(
-                "Failed to create config dir {}: {}",
-                config_dir.display(),
-                e
-            )
-        })?;
-
-        // Lớp 1: Khóa quyền thư mục 0700 trên Unix (chỉ chủ sở hữu truy cập)
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o700));
-        }
-    }
+    let config_dir = get_config_dir()?;
     Ok(config_dir.join("permissions.json"))
 }
 
@@ -169,7 +186,7 @@ pub fn load_policy() -> PolicyFile {
         return parsed;
     }
 
-    // Lớp 2: Xác minh chữ ký số HMAC-SHA256 chống can thiệp file
+    // Layer 2: Verify HMAC-SHA256 digital signature against file tampering
     if let Ok(key) = get_or_create_master_key() {
         let expected_sig = compute_grants_hmac(&parsed.grants, &key);
         if parsed.signature.as_deref() != Some(&expected_sig) {
@@ -196,7 +213,7 @@ pub fn save_policy(policy: &PolicyFile) -> Result<(), String> {
         .map_err(|e| format!("Failed to serialize policy: {}", e))?;
     fs::write(&path, json).map_err(|e| format!("Failed to write policy file: {}", e))?;
 
-    // Lớp 1: Khóa quyền file 0600 trên Unix (chỉ chủ sở hữu đọc/ghi)
+    // Layer 1: Restrict file permissions to 0600 on Unix (owner read/write only)
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

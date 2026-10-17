@@ -3,7 +3,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-const DIALOG_TIMEOUT_SECS: u64 = 60;
+const DIALOG_TIMEOUT_SECS: u64 = 30;
 
 /// Sanitizes and truncates a string for safe display inside a native dialog,
 /// preventing UI spoofing, line-break overflow, or misleading truncation attacks.
@@ -29,13 +29,14 @@ pub fn sanitize_dialog_text(text: &str, max_len: usize) -> String {
 }
 
 /// Displays a native OS dialog asking the user whether to grant access to secrets.
-/// Includes a 60-second timeout to prevent locking host IDEs/clients indefinitely.
+/// Includes a 30-second timeout to prevent locking host IDEs/clients indefinitely.
 pub fn ask_user_permission(command_name: &str, secrets: &[String]) -> bool {
     // In headless / CI environments or when non-interactive, GUI prompt cannot be answered.
     // Immediately return false to prevent CI runner hanging.
     if std::env::var("CI").is_ok()
         || std::env::var("GITHUB_ACTIONS").is_ok()
         || std::env::var("MCP_SENTINEL_NON_INTERACTIVE").is_ok()
+        || std::env::var("MCP_SENTINEL_TEST_MODE").is_ok()
     {
         eprintln!(
             "[mcp-sentinel] Non-interactive / CI environment detected. Cannot display interactive consent dialog. Denying access."

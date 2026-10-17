@@ -7,6 +7,11 @@ use std::path::PathBuf;
 pub const SERVICE_NAME: &str = "mcp-sentinel";
 
 fn get_vault_keys_file_path() -> Option<PathBuf> {
+    if let Ok(custom) = std::env::var("MCP_SENTINEL_CONFIG_DIR") {
+        let dir = PathBuf::from(custom);
+        let _ = fs::create_dir_all(&dir);
+        return Some(dir.join("vault_keys.json"));
+    }
     let base_dirs = BaseDirs::new()?;
     let config_dir = base_dirs.config_dir().join(SERVICE_NAME);
     let _ = fs::create_dir_all(&config_dir);
