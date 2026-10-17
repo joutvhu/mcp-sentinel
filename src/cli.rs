@@ -17,7 +17,7 @@ pub struct Cli {
 pub enum Commands {
     /// Execute an MCP Server within a secured, isolated sandbox
     Run {
-        /// Comma-separated list of required secrets (e.g., GITHUB_TOKEN,DATABASE_URL)
+        /// Comma-separated list of required secrets or alias mappings (e.g., GITHUB_TOKEN,API_KEY=OPENAI_KEY)
         #[arg(short, long, value_delimiter = ',')]
         secrets: Vec<String>,
 
@@ -108,6 +108,34 @@ mod tests {
                 assert_eq!(secrets, vec!["KEY_A".to_string(), "KEY_B".to_string()]);
                 assert_eq!(name, Some("My Server".to_string()));
                 assert_eq!(cmd, vec!["node".to_string(), "server.js".to_string()]);
+            }
+            _ => panic!("Expected Commands::Run"),
+        }
+    }
+
+    #[test]
+    fn test_parse_run_command_with_aliases() {
+        let args = vec![
+            "mcp-sentinel",
+            "run",
+            "--secrets",
+            "API_KEY=OPENAI_PROD_KEY,DATABASE_URL=SUPABASE_URL,GITHUB_TOKEN",
+            "--",
+            "python",
+            "server.py",
+        ];
+        let cli = Cli::try_parse_from(args).expect("CLI should parse aliased secrets successfully");
+        match cli.command {
+            Commands::Run { secrets, cmd, .. } => {
+                assert_eq!(
+                    secrets,
+                    vec![
+                        "API_KEY=OPENAI_PROD_KEY".to_string(),
+                        "DATABASE_URL=SUPABASE_URL".to_string(),
+                        "GITHUB_TOKEN".to_string()
+                    ]
+                );
+                assert_eq!(cmd, vec!["python".to_string(), "server.py".to_string()]);
             }
             _ => panic!("Expected Commands::Run"),
         }

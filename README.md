@@ -1,7 +1,7 @@
 # 🛡️ MCP Sentinel
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-44%2F44%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-52%2F52%20passing-brightgreen.svg)](tests/)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 [![Security](https://img.shields.io/badge/security-Zero--Trust%20%7C%20HMAC--SHA256-orange.svg)](#security-guarantees)
 
@@ -257,8 +257,10 @@ Proxy an MCP server with environment isolation and secret injection.
 mcp-sentinel run [OPTIONS] -- <COMMAND> [ARGS]...
 ```
 
-- `--secrets <KEY1,KEY2,...>`: Comma-separated list of secrets to retrieve from OS Vault and inject into
-  child process.
+- `--secrets <SPEC1,SPEC2,...>`: Comma-separated list of required secrets or alias mappings.
+  - **Plain secret**: `GITHUB_TOKEN` (retrieves `GITHUB_TOKEN` from vault and injects as `GITHUB_TOKEN`).
+  - **Aliased secret**: `TARGET_ENV=VAULT_KEY` (e.g., `API_KEY=OPENAI_PROD_KEY` retrieves `OPENAI_PROD_KEY` from vault and injects into child environment as `API_KEY`).
+  - Allows multiple MCP servers using identical generic environment variable names (such as `API_KEY` or `DATABASE_URL`) to map cleanly to distinct secrets stored in your vault.
 - `--name <NAME>`: Friendly display name shown in authorization prompts.
 - `-- <COMMAND>`: Command and arguments of the target MCP server.
 

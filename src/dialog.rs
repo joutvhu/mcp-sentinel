@@ -46,7 +46,7 @@ pub fn ask_user_permission(command_name: &str, secrets: &[String]) -> bool {
 
     let safe_command = sanitize_dialog_text(command_name, 120);
     let raw_secrets = secrets.join(", ");
-    let safe_secrets = sanitize_dialog_text(&raw_secrets, 120);
+    let safe_secrets = sanitize_dialog_text(&raw_secrets, 240);
 
     let message = format!(
         "MCP Server is requesting access to environment secrets:\n\n\
