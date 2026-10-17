@@ -1,6 +1,6 @@
 [package]
 name = "mcp-sentinel"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["Giáo Hồ"]
 description = "Zero-Trust Secret Vault & Security Proxy for Model Context Protocol (MCP)"
@@ -61,5 +61,3 @@ keyring = { version = "3.0", features = ["apple-native"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.0", features = ["sync-secret-service"] }
 
-[target.'cfg(unix)'.dependencies]
-tokio-util = "0.7"

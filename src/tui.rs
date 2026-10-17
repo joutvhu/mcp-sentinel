@@ -914,7 +914,11 @@ fn render_header(f: &mut Frame, area: Rect) {
         ),
         Span::raw(" | "),
         Span::styled(
-            "Zero-Trust Secret Vault & Security Proxy (v0.1.0)",
+            concat!(
+                "Zero-Trust Secret Vault & Security Proxy (v",
+                env!("CARGO_PKG_VERSION"),
+                ")"
+            ),
             Style::default().fg(Color::White),
         ),
         Span::raw(" | "),
