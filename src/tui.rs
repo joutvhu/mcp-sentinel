@@ -532,7 +532,7 @@ fn main_loop<B: ratatui::backend::Backend>(
                     },
 
                     ModalState::ConfirmDeleteSecret(secret_name) => match key.code {
-                        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
                             let name = secret_name.clone();
                             match vault::delete_secret(&name) {
                                 Ok(_) => {
@@ -559,7 +559,7 @@ fn main_loop<B: ratatui::backend::Backend>(
                     },
 
                     ModalState::ConfirmRevokeGrant(grant_id) => match key.code {
-                        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
                             let id = grant_id.clone();
                             match policy::revoke_grant(&id) {
                                 Ok(_) => {
@@ -591,25 +591,23 @@ fn main_loop<B: ratatui::backend::Backend>(
                     },
 
                     ModalState::ConfirmResetGrants => match key.code {
-                        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
-                            match policy::reset_grants() {
-                                Ok(_) => {
-                                    app.reload_permissions();
-                                    app.modal = ModalState::None;
-                                    app.status_message = Some((
-                                        "✓ All granted permissions have been reset.".to_string(),
-                                        Color::Green,
-                                    ));
-                                }
-                                Err(e) => {
-                                    app.modal = ModalState::None;
-                                    app.status_message = Some((
-                                        format!("Error resetting permissions: {}", e),
-                                        Color::Red,
-                                    ));
-                                }
+                        KeyCode::Char('y') | KeyCode::Char('Y') => match policy::reset_grants() {
+                            Ok(_) => {
+                                app.reload_permissions();
+                                app.modal = ModalState::None;
+                                app.status_message = Some((
+                                    "✓ All granted permissions have been reset.".to_string(),
+                                    Color::Green,
+                                ));
                             }
-                        }
+                            Err(e) => {
+                                app.modal = ModalState::None;
+                                app.status_message = Some((
+                                    format!("Error resetting permissions: {}", e),
+                                    Color::Red,
+                                ));
+                            }
+                        },
                         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                             app.modal = ModalState::None;
                             app.status_message =
@@ -1473,7 +1471,7 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 ]),
                 Line::from(""),
                 Line::from(vec![
-                    Span::styled("  [y / Enter] ", Style::default().fg(Color::Red).bold()),
+                    Span::styled("  [y] ", Style::default().fg(Color::Red).bold()),
                     Span::raw("Yes, Delete  |  "),
                     Span::styled("[n / Esc] ", Style::default().fg(Color::Green).bold()),
                     Span::raw("Cancel"),
@@ -1514,7 +1512,7 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 Line::from("The server will be required to re-prompt for consent on next run."),
                 Line::from(""),
                 Line::from(vec![
-                    Span::styled("  [y / Enter] ", Style::default().fg(Color::Red).bold()),
+                    Span::styled("  [y] ", Style::default().fg(Color::Red).bold()),
                     Span::raw("Yes, Revoke  |  "),
                     Span::styled("[n / Esc] ", Style::default().fg(Color::Green).bold()),
                     Span::raw("Cancel"),
@@ -1551,7 +1549,7 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 Line::from("Every MCP server will be forced to prompt for consent again."),
                 Line::from(""),
                 Line::from(vec![
-                    Span::styled("  [y / Enter] ", Style::default().fg(Color::Red).bold()),
+                    Span::styled("  [y] ", Style::default().fg(Color::Red).bold()),
                     Span::raw("Yes, Reset All  |  "),
                     Span::styled("[n / Esc] ", Style::default().fg(Color::Green).bold()),
                     Span::raw("Cancel"),
