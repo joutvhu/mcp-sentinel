@@ -57,11 +57,103 @@ pub const SIDEBAR_MENU: &[(SidebarAction, &str, &str)] = &[
     (SidebarAction::Quit, "Quit Dashboard", "[q]"),
 ];
 
+#[derive(Clone, Debug, Default)]
+pub struct InputField {
+    pub text: String,
+    pub cursor: usize,
+}
+
+impl InputField {
+    pub fn new(initial: String) -> Self {
+        let cursor = initial.chars().count();
+        Self {
+            text: initial,
+            cursor,
+        }
+    }
+
+    pub fn insert(&mut self, c: char) {
+        let mut chars: Vec<char> = self.text.chars().collect();
+        if self.cursor <= chars.len() {
+            chars.insert(self.cursor, c);
+            self.cursor += 1;
+            self.text = chars.into_iter().collect();
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        if self.cursor > 0 {
+            let mut chars: Vec<char> = self.text.chars().collect();
+            if self.cursor <= chars.len() {
+                chars.remove(self.cursor - 1);
+                self.cursor -= 1;
+                self.text = chars.into_iter().collect();
+            }
+        }
+    }
+
+    pub fn delete(&mut self) {
+        let mut chars: Vec<char> = self.text.chars().collect();
+        if self.cursor < chars.len() {
+            chars.remove(self.cursor);
+            self.text = chars.into_iter().collect();
+        }
+    }
+
+    pub fn move_left(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+        }
+    }
+
+    pub fn move_right(&mut self) {
+        let len = self.text.chars().count();
+        if self.cursor < len {
+            self.cursor += 1;
+        }
+    }
+
+    pub fn move_home(&mut self) {
+        self.cursor = 0;
+    }
+
+    pub fn move_end(&mut self) {
+        self.cursor = self.text.chars().count();
+    }
+
+    pub fn to_display_line(&self, is_focused: bool) -> Line<'static> {
+        let chars: Vec<char> = self.text.chars().collect();
+        if !is_focused {
+            return Line::from(Span::raw(self.text.clone()));
+        }
+
+        if self.cursor < chars.len() {
+            let before: String = chars[..self.cursor].iter().collect();
+            let cursor_char: String = chars[self.cursor].to_string();
+            let after: String = chars[self.cursor + 1..].iter().collect();
+
+            Line::from(vec![
+                Span::raw(before),
+                Span::styled(
+                    cursor_char,
+                    Style::default().bg(Color::White).fg(Color::Black).bold(),
+                ),
+                Span::raw(after),
+            ])
+        } else {
+            Line::from(vec![
+                Span::raw(self.text.clone()),
+                Span::styled(" ", Style::default().bg(Color::White).fg(Color::Black)),
+            ])
+        }
+    }
+}
+
 pub enum ModalState {
     None,
     AddSecret {
-        key: String,
-        value: String,
+        key: InputField,
+        value: InputField,
         focus_value: bool,
     },
     ConfirmDeleteSecret(String),
@@ -73,7 +165,7 @@ pub enum ModalState {
     },
     UpdateSecret {
         key: String,
-        value: String,
+        value: InputField,
     },
 }
 
@@ -261,13 +353,21 @@ impl App {
         }
     }
 
+    pub fn open_add_modal(&mut self) {
+        self.modal = ModalState::AddSecret {
+            key: InputField::default(),
+            value: InputField::default(),
+            focus_value: false,
+        };
+    }
+
     pub fn open_update_modal(&mut self) {
         if let Some(i) = self.secrets_state.selected() {
             if let Some(key_name) = self.secrets.get(i) {
                 let current_val = vault::get_secret(key_name).unwrap_or_default();
                 self.modal = ModalState::UpdateSecret {
                     key: key_name.clone(),
-                    value: current_val,
+                    value: InputField::new(current_val),
                 };
             }
         }
@@ -347,8 +447,8 @@ fn main_loop<B: ratatui::backend::Backend>(
                             *focus_value = !*focus_value;
                         }
                         KeyCode::Enter => {
-                            let key_trimmed = k.trim().to_string();
-                            let val_trimmed = v.trim().to_string();
+                            let key_trimmed = k.text.trim().to_string();
+                            let val_trimmed = v.text.trim().to_string();
 
                             if key_trimmed.is_empty() {
                                 app.status_message = Some((
@@ -379,18 +479,53 @@ fn main_loop<B: ratatui::backend::Backend>(
                                 }
                             }
                         }
+                        KeyCode::Left => {
+                            if *focus_value {
+                                v.move_left();
+                            } else {
+                                k.move_left();
+                            }
+                        }
+                        KeyCode::Right => {
+                            if *focus_value {
+                                v.move_right();
+                            } else {
+                                k.move_right();
+                            }
+                        }
+                        KeyCode::Home => {
+                            if *focus_value {
+                                v.move_home();
+                            } else {
+                                k.move_home();
+                            }
+                        }
+                        KeyCode::End => {
+                            if *focus_value {
+                                v.move_end();
+                            } else {
+                                k.move_end();
+                            }
+                        }
+                        KeyCode::Delete => {
+                            if *focus_value {
+                                v.delete();
+                            } else {
+                                k.delete();
+                            }
+                        }
                         KeyCode::Backspace => {
                             if *focus_value {
-                                v.pop();
+                                v.backspace();
                             } else {
-                                k.pop();
+                                k.backspace();
                             }
                         }
                         KeyCode::Char(c) => {
                             if *focus_value {
-                                v.push(c);
+                                v.insert(c);
                             } else {
-                                k.push(c);
+                                k.insert(c);
                             }
                         }
                         _ => {}
@@ -498,7 +633,7 @@ fn main_loop<B: ratatui::backend::Backend>(
                         }
                         KeyCode::Enter => {
                             let key_name = k.clone();
-                            let val_trimmed = v.trim().to_string();
+                            let val_trimmed = v.text.trim().to_string();
                             match vault::set_secret(&key_name, &val_trimmed) {
                                 Ok(_) => {
                                     app.reload_secrets();
@@ -514,11 +649,26 @@ fn main_loop<B: ratatui::backend::Backend>(
                                 }
                             }
                         }
+                        KeyCode::Left => {
+                            v.move_left();
+                        }
+                        KeyCode::Right => {
+                            v.move_right();
+                        }
+                        KeyCode::Home => {
+                            v.move_home();
+                        }
+                        KeyCode::End => {
+                            v.move_end();
+                        }
+                        KeyCode::Delete => {
+                            v.delete();
+                        }
                         KeyCode::Backspace => {
-                            v.pop();
+                            v.backspace();
                         }
                         KeyCode::Char(c) => {
-                            v.push(c);
+                            v.insert(c);
                         }
                         _ => {}
                     },
@@ -549,11 +699,7 @@ fn main_loop<B: ratatui::backend::Backend>(
                                 continue;
                             }
                             KeyCode::Char('a') => {
-                                app.modal = ModalState::AddSecret {
-                                    key: String::new(),
-                                    value: String::new(),
-                                    focus_value: false,
-                                };
+                                app.open_add_modal();
                                 continue;
                             }
                             KeyCode::Char('r') => {
@@ -591,11 +737,7 @@ fn main_loop<B: ratatui::backend::Backend>(
                                                 app.focus = FocusArea::Content;
                                             }
                                             SidebarAction::AddSecret => {
-                                                app.modal = ModalState::AddSecret {
-                                                    key: String::new(),
-                                                    value: String::new(),
-                                                    focus_value: false,
-                                                };
+                                                app.open_add_modal();
                                             }
                                             SidebarAction::RefreshVault => {
                                                 app.reload_secrets();
@@ -1272,12 +1414,9 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 .border_type(BorderType::Rounded)
                 .title(" Key Name ")
                 .style(key_style);
-            let display_key = if !*focus_value {
-                format!("{}_", key)
-            } else {
-                key.clone()
-            };
-            let p_key = Paragraph::new(display_key).block(key_block).style(modal_bg);
+            let p_key = Paragraph::new(key.to_display_line(!*focus_value))
+                .block(key_block)
+                .style(modal_bg);
             f.render_widget(p_key, chunks[1]);
 
             let val_style = if *focus_value {
@@ -1290,19 +1429,18 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 .border_type(BorderType::Rounded)
                 .title(" Secret Value ")
                 .style(val_style);
-            let display_val = if *focus_value {
-                format!("{}_", value)
-            } else {
-                value.clone()
-            };
-            let p_val = Paragraph::new(display_val).block(val_block).style(modal_bg);
+            let p_val = Paragraph::new(value.to_display_line(*focus_value))
+                .block(val_block)
+                .style(modal_bg);
             f.render_widget(p_val, chunks[3]);
 
             let actions = Paragraph::new(vec![Line::from(vec![
                 Span::styled("[Tab] ", Style::default().fg(Color::Cyan).bold()),
-                Span::raw("Switch Field  |  "),
+                Span::raw("Switch  |  "),
+                Span::styled("[Left/Right] ", Style::default().fg(Color::Cyan).bold()),
+                Span::raw("Move  |  "),
                 Span::styled("[Enter] ", Style::default().fg(Color::Green).bold()),
-                Span::raw("Save to Vault  |  "),
+                Span::raw("Save  |  "),
                 Span::styled("[Esc] ", Style::default().fg(Color::Red).bold()),
                 Span::raw("Cancel"),
             ])])
@@ -1504,11 +1642,14 @@ fn render_modals(f: &mut Frame, app: &mut App, area: Rect) {
                 .border_type(BorderType::Rounded)
                 .title(" New Secret Value ")
                 .style(Style::default().fg(Color::Yellow).bold());
-            let display_val = format!("{}_", value);
-            let p_val = Paragraph::new(display_val).block(val_block).style(modal_bg);
+            let p_val = Paragraph::new(value.to_display_line(true))
+                .block(val_block)
+                .style(modal_bg);
             f.render_widget(p_val, chunks[2]);
 
             let actions = Paragraph::new(vec![Line::from(vec![
+                Span::styled("[Left/Right] ", Style::default().fg(Color::Cyan).bold()),
+                Span::raw("Move Cursor  |  "),
                 Span::styled("[Enter] ", Style::default().fg(Color::Green).bold()),
                 Span::raw("Save / Update  |  "),
                 Span::styled("[Esc] ", Style::default().fg(Color::Red).bold()),
