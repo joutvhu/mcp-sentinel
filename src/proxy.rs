@@ -202,24 +202,29 @@ pub async fn run_child_and_pipe(
     let stdout_writer_task = tokio::spawn(async move {
         let mut child_buf = Vec::new();
         let mut raw_buf = [0u8; 8192];
+        let mut stdout_at_newline = true;
+        let mut err_rx_closed = false;
         loop {
             tokio::select! {
-                // Synthetic errors are written immediately, flushing any pending child output cleanly
-                Some(err_bytes) = err_rx.recv() => {
-                    if !child_buf.is_empty() {
-                        let needs_newline = child_buf.last() != Some(&b'\n');
-                        if host_stdout.write_all(&child_buf).await.is_err() {
-                            break;
+                // Synthetic errors are written immediately without corrupting in-progress child output
+                msg = err_rx.recv(), if !err_rx_closed => {
+                    match msg {
+                        Some(err_bytes) => {
+                            if !stdout_at_newline {
+                                if host_stdout.write_all(b"\n").await.is_err() {
+                                    break;
+                                }
+                            }
+                            if host_stdout.write_all(&err_bytes).await.is_err() {
+                                break;
+                            }
+                            let _ = host_stdout.flush().await;
+                            stdout_at_newline = err_bytes.last() == Some(&b'\n');
                         }
-                        if needs_newline && host_stdout.write_all(b"\n").await.is_err() {
-                            break;
+                        None => {
+                            err_rx_closed = true;
                         }
-                        child_buf.clear();
                     }
-                    if host_stdout.write_all(&err_bytes).await.is_err() {
-                        break;
-                    }
-                    let _ = host_stdout.flush().await;
                 }
                 res = duplex_read.read(&mut raw_buf) => {
                     match res {
@@ -240,7 +245,17 @@ pub async fn run_child_and_pipe(
                                     break;
                                 }
                                 let _ = host_stdout.flush().await;
+                                stdout_at_newline = true;
                                 child_buf.drain(..=last_nl);
+                            } else if child_buf.len() >= 65536 {
+                                // Safeguard against unbounded memory growth if child sends massive stream without newline
+                                let ends_with_nl = child_buf.last() == Some(&b'\n');
+                                if host_stdout.write_all(&child_buf).await.is_err() {
+                                    break;
+                                }
+                                let _ = host_stdout.flush().await;
+                                stdout_at_newline = ends_with_nl;
+                                child_buf.clear();
                             }
                         }
                         Err(_) => break,
@@ -251,6 +266,10 @@ pub async fn run_child_and_pipe(
         // Drain any remaining child_buf
         if !child_buf.is_empty() {
             let _ = host_stdout.write_all(&child_buf).await;
+            if child_buf.last() != Some(&b'\n') {
+                let _ = host_stdout.write_all(b"\n").await;
+            }
+            child_buf.clear();
         }
         // Drain any remaining synthetic errors
         while let Ok(err_bytes) = err_rx.try_recv() {
@@ -260,7 +279,7 @@ pub async fn run_child_and_pipe(
     });
 
     // Spawn async background tasks for stdin, stdout, stderr forwarding
-    let in_task = tokio::spawn(async move {
+    let mut in_task = tokio::spawn(async move {
         if tool_profile.is_some() || audit_enabled {
             let mut in_buf = Vec::new();
             let mut read_buf = [0u8; 8192];
@@ -406,7 +425,7 @@ pub async fn run_child_and_pipe(
         res = child.wait() => {
             res?
         }
-        _ = in_task => {
+        _ = &mut in_task => {
             // STDIN closed by client. Give child 5 seconds to gracefully exit
             match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
                 Ok(res) => res?,
@@ -418,6 +437,9 @@ pub async fn run_child_and_pipe(
             }
         }
     };
+
+    // Abort in_task to avoid lingering task reading host_stdin if child exited first
+    in_task.abort();
 
     // Join remaining forwarding tasks
     let _ = out_task.await;

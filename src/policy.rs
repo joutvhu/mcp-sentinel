@@ -107,8 +107,8 @@ pub fn get_or_create_master_key() -> Result<Vec<u8>, String> {
     // Save to OS Keyring as the primary enclave
     let keyring_saved = crate::vault::set_secret(MASTER_SIGNING_KEY_NAME, &hex_key).is_ok();
 
-    // Only write to local file if Keyring failed (headless/container) or insecure keyfile is explicitly permitted
-    if !keyring_saved || allow_file {
+    // Only write to local file if disk keyfile fallback is explicitly permitted
+    if allow_file {
         if let Some(key_path) = get_master_key_file_path() {
             let _ = fs::write(&key_path, &hex_key);
             #[cfg(unix)]
@@ -117,6 +117,10 @@ pub fn get_or_create_master_key() -> Result<Vec<u8>, String> {
                 let _ = fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600));
             }
         }
+    } else if !keyring_saved {
+        eprintln!(
+            "[mcp-sentinel] Security Warning: OS Keyring is unavailable. Set MCP_SENTINEL_ALLOW_INSECURE_KEYFILE=1 to enable disk keyfile fallback in headless environments."
+        );
     }
 
     let key = key_bytes.to_vec();
@@ -220,7 +224,7 @@ pub fn save_policy(policy: &PolicyFile) -> Result<(), String> {
     let json = serde_json::to_string_pretty(&signed_policy)
         .map_err(|e| format!("Failed to serialize policy: {}", e))?;
 
-    let tmp_path = path.with_extension("tmp");
+    let tmp_path = path.with_extension(format!("{}.tmp", std::process::id()));
     fs::write(&tmp_path, json).map_err(|e| format!("Failed to write policy file: {}", e))?;
 
     // Layer 1: Restrict file permissions to 0600 on Unix (owner read/write only)

@@ -199,6 +199,27 @@ fn sanitize_for_env_key(name: &str) -> String {
     }
 }
 
+/// If a value is an environment variable placeholder like `${env:VAR}`, `${VAR}`, or `$VAR`,
+/// attempts to resolve it from the current process environment. Falls back to original value if unset.
+fn resolve_env_placeholder(val: &str) -> String {
+    let var_name = if val.starts_with("${env:") && val.ends_with('}') && val.len() > 7 {
+        Some(&val[6..val.len() - 1])
+    } else if val.starts_with("${") && val.ends_with('}') && val.len() > 3 {
+        Some(&val[2..val.len() - 1])
+    } else if val.starts_with('$') && !val.contains(' ') && val.len() > 1 {
+        Some(&val[1..])
+    } else {
+        None
+    };
+
+    if let Some(name) = var_name {
+        if let Ok(resolved) = std::env::var(name) {
+            return resolved;
+        }
+    }
+    val.to_string()
+}
+
 /// Transforms raw JSON content: extracts plaintext secrets into OS vault, wraps commands with mcp-sentinel,
 /// and strips plaintext env vars from the JSON.
 pub fn transform_config_json(
@@ -260,10 +281,11 @@ pub fn transform_config_json(
         // Extract secrets from plaintext "env" block
         if let Some(env_val) = server_obj.get("env").and_then(|e| e.as_object()) {
             for (env_key, val) in env_val {
-                let val_str = match val.as_str() {
+                let raw_val_str = match val.as_str() {
                     Some(s) => s.to_string(),
                     None => val.to_string(),
                 };
+                let val_str = resolve_env_placeholder(&raw_val_str);
 
                 let clean_key = sanitize_for_env_key(env_key);
 
@@ -374,13 +396,32 @@ pub fn migrate_file(
     if !dry_run {
         if !no_backup {
             let bak = file_path.with_extension("json.bak");
-            fs::write(&bak, &content)
-                .map_err(|e| format!("Failed to create backup file '{}': {}", bak.display(), e))?;
             #[cfg(unix)]
             {
+                use std::fs::OpenOptions;
+                use std::io::Write;
+                use std::os::unix::fs::OpenOptionsExt;
                 use std::os::unix::fs::PermissionsExt;
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(&bak)
+                    .map_err(|e| format!("Failed to create backup file '{}': {}", bak.display(), e))?;
+                file.write_all(content.as_bytes())
+                    .map_err(|e| format!("Failed to write backup file '{}': {}", bak.display(), e))?;
                 let _ = fs::set_permissions(&bak, fs::Permissions::from_mode(0o600));
             }
+            #[cfg(not(unix))]
+            {
+                fs::write(&bak, &content)
+                    .map_err(|e| format!("Failed to create backup file '{}': {}", bak.display(), e))?;
+            }
+            eprintln!(
+                "[mcp-sentinel] Security Warning: Backup configuration file '{}' contains plaintext secrets! Please inspect and securely delete it once verified.",
+                bak.display()
+            );
             backup_path = Some(bak);
         }
 
@@ -502,5 +543,77 @@ mod tests {
                 assert!(unique.insert(p), "Found duplicate path in search results");
             }
         }
+    }
+
+    #[test]
+    fn test_resolve_env_placeholder() {
+        std::env::set_var("TEST_SENTINEL_ENV_EXPAND", "my_real_secret_token_999");
+
+        // Format: ${env:VAR}
+        assert_eq!(
+            resolve_env_placeholder("${env:TEST_SENTINEL_ENV_EXPAND}"),
+            "my_real_secret_token_999"
+        );
+
+        // Format: ${VAR}
+        assert_eq!(
+            resolve_env_placeholder("${TEST_SENTINEL_ENV_EXPAND}"),
+            "my_real_secret_token_999"
+        );
+
+        // Format: $VAR
+        assert_eq!(
+            resolve_env_placeholder("$TEST_SENTINEL_ENV_EXPAND"),
+            "my_real_secret_token_999"
+        );
+
+        // Non-existent variable falls back to literal string
+        assert_eq!(
+            resolve_env_placeholder("${env:NON_EXISTENT_VAR_XYZ}"),
+            "${env:NON_EXISTENT_VAR_XYZ}"
+        );
+
+        // Regular literal string remains untouched
+        assert_eq!(
+            resolve_env_placeholder("plaintext_password_123"),
+            "plaintext_password_123"
+        );
+    }
+
+    #[test]
+    fn test_migrate_file_backup_creation_and_permissions() {
+        let temp_dir = std::env::temp_dir().join(format!("mcp_test_bak_{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp_dir);
+        let config_file = temp_dir.join("test_config.json");
+        let initial_json = r#"{
+            "mcpServers": {
+                "test": {
+                    "command": "node",
+                    "args": ["server.js"],
+                    "env": { "TEST_MIGRATE_KEY": "secret_val_123" }
+                }
+            }
+        }"#;
+        fs::write(&config_file, initial_json).unwrap();
+
+        let report = migrate_file(&config_file, false, false).unwrap();
+        assert!(report.backup_path.is_some());
+        let bak = report.backup_path.unwrap();
+        assert!(bak.exists());
+        assert_eq!(fs::read_to_string(&bak).unwrap(), initial_json);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = fs::metadata(&bak).unwrap();
+            let mode = meta.permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "Backup file permissions must be 0o600");
+        }
+
+        // Clean up
+        let _ = fs::remove_file(&config_file);
+        let _ = fs::remove_file(&bak);
+        let _ = fs::remove_dir(&temp_dir);
+        let _ = crate::vault::delete_secret("TEST_MIGRATE_KEY");
     }
 }

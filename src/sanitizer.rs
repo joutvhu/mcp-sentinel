@@ -34,6 +34,11 @@ const SAFE_KEYS: &[&str] = &[
     "REQUESTS_CA_BUNDLE",
     "CURL_CA_BUNDLE",
     "VIRTUAL_ENV",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "ALLUSERSPROFILE",
+    "COMMONPROGRAMFILES",
+    "COMMONPROGRAMFILES(X86)",
 ];
 
 #[cfg(unix)]
@@ -79,7 +84,7 @@ pub fn build_sanitized_env(secrets_to_inject: &HashMap<String, String>) -> HashM
 
     // Inject approved secrets (excluding reserved sentinel prefixes)
     for (k, v) in secrets_to_inject {
-        if !k.to_uppercase().starts_with("MCP_SENTINEL_") && !k.starts_with("__") {
+        if !k.to_uppercase().starts_with("MCP_SENTINEL") && !k.starts_with("__") {
             clean_env.insert(k.clone(), v.clone());
         }
     }

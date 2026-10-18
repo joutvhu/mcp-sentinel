@@ -50,7 +50,8 @@ pub enum AuthDecision {
 ///
 /// Includes a 30-second timeout to prevent locking host IDEs/clients indefinitely.
 pub fn ask_user_permission(command_name: &str, secrets: &[String]) -> AuthDecision {
-    // Check mock test variable first if present
+    // Check mock test variable first if present (only in test or debug builds)
+    #[cfg(any(test, debug_assertions))]
     if let Ok(mock) = std::env::var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE") {
         let mock_lower = mock.trim().to_lowercase();
         if mock_lower == "allow_once" || mock_lower == "once" {
@@ -76,6 +77,15 @@ pub fn ask_user_permission(command_name: &str, secrets: &[String]) -> AuthDecisi
         eprintln!(
             "[mcp-sentinel] Non-interactive / CI environment detected. Cannot display interactive consent dialog. Denying access.\n\
              Tip: Pre-authorize on headless/CI using: mcp-sentinel permissions grant [--name <NAME>] --secrets <SECRETS> -- <COMMAND>"
+        );
+        return AuthDecision::Deny;
+    }
+
+    #[cfg(target_os = "linux")]
+    if std::env::var("DISPLAY").is_err() && std::env::var("WAYLAND_DISPLAY").is_err() {
+        eprintln!(
+            "[mcp-sentinel] Headless Linux environment detected (neither DISPLAY nor WAYLAND_DISPLAY is set). Cannot display dialog. Denying access.\n\
+             Tip: Pre-authorize on headless/SSH using: mcp-sentinel permissions grant [--name <NAME>] --secrets <SECRETS> -- <COMMAND>"
         );
         return AuthDecision::Deny;
     }

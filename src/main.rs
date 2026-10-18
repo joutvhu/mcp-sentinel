@@ -720,6 +720,7 @@ async fn main() {
                     Ok(report) => {
                         if let Some(bak) = report.backup_path {
                             println!("   📄 Created backup at: {}", bak.display());
+                            println!("      ⚠️  Warning: Backup contains plaintext secrets. Please inspect and delete it once verified.");
                         }
                         for res in report.results {
                             if res.already_migrated {

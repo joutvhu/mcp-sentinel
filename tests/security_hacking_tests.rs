@@ -223,6 +223,15 @@ fn hack_test_setting_reserved_key_names_blocked() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("reserved prefix"));
 
+    // Also test exact reserved prefix without underscore
+    let output_exact = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args(["secret", "set", "MCP_SENTINEL", "0"])
+        .output()
+        .expect("Failed to execute mcp-sentinel secret set");
+    assert!(!output_exact.status.success());
+    let stderr_exact = String::from_utf8_lossy(&output_exact.stderr);
+    assert!(stderr_exact.contains("reserved prefix"));
+
     // Also test invalid characters
     let output_invalid = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
         .args(["secret", "set", "KEY=MALICIOUS", "value"])
@@ -1201,3 +1210,197 @@ fn hack_test_layer7_tool_firewall_blocks_malformed_name_call() {
         stdout
     );
 }
+
+/// HACK ATTACK 23: Layer 7 Tool Firewall Blocks Unicode Homoglyphs & Trojan Source
+/// An attacker tries to bypass blacklist patterns like `*delete*` using Cyrillic homoglyph `е` (U+0435)
+/// or invisible zero-width spaces (\u{200B}).
+/// The L7 firewall must detect both and fail-closed with code -32603.
+#[test]
+fn hack_test_layer7_tool_firewall_blocks_unicode_homoglyphs_and_trojan_source() {
+    use std::io::Write;
+    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+
+    let server_script = r#"
+        const readline = require('readline');
+        const rl = readline.createInterface({ input: process.stdin });
+        rl.on('line', (line) => {
+            console.log(JSON.stringify({ jsonrpc: '2.0', id: 99, result: { executed: 'HOMOGLYPH_BYPASS_EXECUTED' } }));
+        });
+    "#;
+
+    // Test 1: Cyrillic homoglyph 'е' (U+0435) in 'delete_database'
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args([
+            "run",
+            "--profile",
+            "read-only",
+            "--",
+            "node",
+            "-e",
+            server_script,
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn mcp-sentinel");
+
+    {
+        let stdin = child.stdin.as_mut().expect("Failed to open child stdin");
+        let cyrillic_req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 101,
+            "method": "tools/call",
+            "params": { "name": "d\u{0435}lete_database" }
+        });
+        writeln!(stdin, "{}", cyrillic_req).unwrap();
+    }
+
+    let output = child.wait_with_output().expect("Failed to read output");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.contains("\"code\":-32001"),
+        "Cyrillic homoglyph delete call must be intercepted! Stdout: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("HOMOGLYPH_BYPASS_EXECUTED"),
+        "Cyrillic homoglyph tool call must NEVER reach child process!"
+    );
+
+    // Test 2: Trojan Source zero-width space in tool name
+    let mut child_zw = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args([
+            "run",
+            "--profile",
+            "read-only",
+            "--",
+            "node",
+            "-e",
+            server_script,
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn mcp-sentinel");
+
+    {
+        let stdin = child_zw.stdin.as_mut().expect("Failed to open child stdin");
+        let zw_req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 102,
+            "method": "tools/call",
+            "params": { "name": "del\u{200B}ete_database" }
+        });
+        writeln!(stdin, "{}", zw_req).unwrap();
+    }
+
+    let output_zw = child_zw.wait_with_output().expect("Failed to read output");
+    let stdout_zw = String::from_utf8_lossy(&output_zw.stdout);
+
+    assert!(
+        stdout_zw.contains("\"code\":-32001"),
+        "Zero-width Trojan Source tool call must be intercepted! Stdout: {}",
+        stdout_zw
+    );
+    assert!(
+        !stdout_zw.contains("HOMOGLYPH_BYPASS_EXECUTED"),
+        "Zero-width Trojan Source tool call must NEVER reach child process!"
+    );
+}
+
+/// HACK ATTACK 24: JSON-RPC Stream Framing Integrity on Synthetic Error Interleaving
+/// When a child process emits an incomplete, in-flight partial JSON-RPC frame without a newline,
+/// and the Layer 7 firewall emits a synthetic error (e.g. blocking a prohibited tool call),
+/// mcp-sentinel must NOT inject an artificial newline or corrupt the partial child frame.
+/// Both the synthetic error and subsequent completed child frame must parse as valid JSON.
+#[test]
+fn hack_test_jsonrpc_stream_framing_integrity_on_interleaved_synthetic_error() {
+    use std::io::Write;
+    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+
+    let server_script = r#"
+        const readline = require('readline');
+        // Immediately emit a partial chunk without trailing newline
+        process.stdout.write('{"jsonrpc":"2.0","id":100,"result":{"status":"child_chunk"');
+        
+        // After 200ms, finish the line
+        setTimeout(() => {
+            process.stdout.write(',"completed":true}}\n');
+        }, 200);
+
+        const rl = readline.createInterface({ input: process.stdin });
+        rl.on('line', (line) => {
+            // Should not receive blocked calls
+        });
+    "#;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args([
+            "run",
+            "--profile",
+            "read-only",
+            "--",
+            "node",
+            "-e",
+            server_script,
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn mcp-sentinel");
+
+    // Give child 50ms to write the initial partial chunk
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    {
+        let stdin = child.stdin.as_mut().expect("Failed to open child stdin");
+        // Send a blocked request that triggers a synthetic error from the firewall
+        let blocked_req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 200,
+            "method": "tools/call",
+            "params": { "name": "drop_database" }
+        });
+        writeln!(stdin, "{}", blocked_req).unwrap();
+    }
+
+    let output = child.wait_with_output().expect("Failed to read output");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Stdout must contain both the synthetic error for id 200 and the completed child response for id 100
+    assert!(
+        stdout.contains("\"code\":-32001"),
+        "Must contain synthetic firewall error for blocked call! Stdout: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("\"completed\":true"),
+        "Must contain completed child response! Stdout: {}",
+        stdout
+    );
+
+    // Verify each line is valid JSON (framing not corrupted)
+    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+    for line in &lines {
+        let parsed: Result<serde_json::Value, _> = serde_json::from_str(line);
+        assert!(
+            parsed.is_ok(),
+            "Each output line must be valid, uncorrupted JSON! Broken line: '{}', Error: {:?}",
+            line,
+            parsed.err()
+        );
+    }
+
+    // Specifically verify the reconstructed child line
+    let child_line = lines.iter().find(|l| l.contains("\"id\":100") || l.contains("\"id\": 100"));
+    assert!(
+        child_line.is_some(),
+        "Reconstructed child message must be present intact! Output: {}",
+        stdout
+    );
+    let child_json: serde_json::Value = serde_json::from_str(child_line.unwrap()).unwrap();
+    assert_eq!(child_json["result"]["status"], "child_chunk");
+    assert_eq!(child_json["result"]["completed"], true);
+}
+

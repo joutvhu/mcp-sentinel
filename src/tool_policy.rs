@@ -149,13 +149,83 @@ pub fn matches_pattern(candidate: &str, pattern: &str) -> bool {
     p_idx == p_chars.len()
 }
 
+/// Returns true if the string contains dangerous zero-width, formatting, or bidirectional control characters.
+pub fn contains_dangerous_unicode(s: &str) -> bool {
+    s.chars().any(|c| {
+        matches!(
+            c,
+            '\u{200B}'..='\u{200D}' | // Zero-width spaces and joiners
+            '\u{FEFF}' |              // Byte order mark / zero-width no-break space
+            '\u{00AD}' |              // Soft hyphen
+            '\u{2060}' |              // Word joiner
+            '\u{200E}' | '\u{200F}' | // Direction marks
+            '\u{202A}'..='\u{202E}' | // Bidi embedding/override controls
+            '\u{2066}'..='\u{2069}'   // Bidi isolates
+        )
+    })
+}
+
+/// Normalizes common Unicode homoglyphs (Cyrillic, Greek, full-width) to their ASCII Latin equivalents.
+pub fn normalize_homoglyphs(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for c in input.chars() {
+        let mapped = match c {
+            // Full-width ASCII
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            // Cyrillic homoglyphs
+            'а' | 'А' => 'a',
+            'в' | 'В' => 'b',
+            'с' | 'С' => 'c',
+            'ԁ' | 'Ԁ' => 'd',
+            'е' | 'Е' | 'ё' | 'Ё' => 'e',
+            'һ' | 'Һ' => 'h',
+            'і' | 'І' => 'i',
+            'ј' | 'Ј' => 'j',
+            'к' | 'К' => 'k',
+            'м' | 'М' => 'm',
+            'о' | 'О' => 'o',
+            'р' | 'Р' => 'p',
+            'ԛ' | 'Ԛ' => 'q',
+            'ѕ' | 'Ѕ' => 's',
+            'т' | 'Т' => 't',
+            'у' | 'У' => 'y',
+            'ԝ' | 'Ԝ' => 'w',
+            'х' | 'Х' => 'x',
+            // Greek homoglyphs
+            'α' | 'Α' => 'a',
+            'β' | 'Β' => 'b',
+            'ε' | 'Ε' => 'e',
+            'ι' | 'Ι' => 'i',
+            'κ' | 'Κ' => 'k',
+            'ο' | 'Ο' => 'o',
+            'ρ' | 'Ρ' => 'p',
+            'τ' | 'Τ' => 't',
+            'υ' | 'Υ' => 'u',
+            'χ' | 'Χ' => 'x',
+            _ => c,
+        };
+        out.push(mapped);
+    }
+    out
+}
+
 /// Evaluates whether an MCP tool call is permitted by a `ToolProfile`.
 pub fn evaluate_tool_call(tool_name: &str, profile: &ToolProfile) -> ToolDecision {
     let tool_clean = tool_name.trim();
 
+    // 0. Reject dangerous zero-width and bidirectional control characters (Trojan Source / evasion)
+    if contains_dangerous_unicode(tool_clean) {
+        return ToolDecision::Blocked {
+            reason: "Tool name contains forbidden control or zero-width Unicode characters"
+                .to_string(),
+        };
+    }
+
+    let deconfused = normalize_homoglyphs(tool_clean);
+
     // 1. Check Deny list (Deny always takes precedence for security)
     for pattern in &profile.deny {
-        if matches_pattern(tool_clean, pattern) {
+        if matches_pattern(tool_clean, pattern) || matches_pattern(&deconfused, pattern) {
             return ToolDecision::Blocked {
                 reason: format!("Matches deny pattern '{}'", pattern),
             };
@@ -244,7 +314,7 @@ pub fn save_profiles(file: &ToolPolicyFile) -> Result<(), String> {
     let json = serde_json::to_string_pretty(&to_save)
         .map_err(|e| format!("Failed to serialize tool policy file: {}", e))?;
 
-    let tmp_path = file_path.with_extension("tmp");
+    let tmp_path = file_path.with_extension(format!("{}.tmp", std::process::id()));
     fs::write(&tmp_path, json)
         .map_err(|e| format!("Failed to write {}: {}", tmp_path.display(), e))?;
 
@@ -390,5 +460,66 @@ mod tests {
 
         let is_valid = matches!(file.signature, Some(ref sig) if sig == &expected_sig);
         assert!(!is_valid, "Unsigned policy file must be rejected!");
+    }
+
+    #[test]
+    fn test_evaluate_tool_call_unicode_homoglyph_and_trojan_source_blocked() {
+        let profile = ToolProfile {
+            name: "strict-read".to_string(),
+            description: None,
+            allow: vec!["read_*".to_string()],
+            deny: vec!["*delete*".to_string(), "*drop*".to_string()],
+        };
+
+        // Standard deny match
+        assert!(matches!(
+            evaluate_tool_call("delete_all", &profile),
+            ToolDecision::Blocked { .. }
+        ));
+
+        // Cyrillic homoglyph: 'е' (U+0435) instead of Latin 'e'
+        let cyrillic_delete = "d\u{0435}lete_database";
+        match evaluate_tool_call(cyrillic_delete, &profile) {
+            ToolDecision::Blocked { reason } => {
+                assert!(reason.contains("Matches deny pattern '*delete*'"));
+            }
+            _ => panic!("Expected Cyrillic homoglyph delete to be blocked"),
+        }
+
+        // Cyrillic homoglyph: 'о' (U+043E) in 'drop'
+        let cyrillic_drop = "dr\u{043E}p_table";
+        match evaluate_tool_call(cyrillic_drop, &profile) {
+            ToolDecision::Blocked { reason } => {
+                assert!(reason.contains("Matches deny pattern '*drop*'"));
+            }
+            _ => panic!("Expected Cyrillic homoglyph drop to be blocked"),
+        }
+
+        // Fullwidth Latin: 'ｄｅｌｅｔｅ'
+        let fullwidth_delete = "ｄｅｌｅｔｅ_everything";
+        match evaluate_tool_call(fullwidth_delete, &profile) {
+            ToolDecision::Blocked { reason } => {
+                assert!(reason.contains("Matches deny pattern '*delete*'"));
+            }
+            _ => panic!("Expected fullwidth Latin delete to be blocked"),
+        }
+
+        // Trojan Source: Zero-width space (\u{200B})
+        let zero_width_call = "del\u{200B}ete_database";
+        match evaluate_tool_call(zero_width_call, &profile) {
+            ToolDecision::Blocked { reason } => {
+                assert!(reason.contains("forbidden control or zero-width"));
+            }
+            _ => panic!("Expected zero-width Unicode tool call to be blocked"),
+        }
+
+        // Trojan Source: Bidi override (\u{202E})
+        let bidi_call = "safe_tool\u{202E}txt";
+        match evaluate_tool_call(bidi_call, &profile) {
+            ToolDecision::Blocked { reason } => {
+                assert!(reason.contains("forbidden control or zero-width"));
+            }
+            _ => panic!("Expected Bidi override tool call to be blocked"),
+        }
     }
 }

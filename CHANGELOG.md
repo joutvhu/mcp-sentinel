@@ -76,9 +76,13 @@ This release introduces comprehensive Layer 7 tool call interception, automated 
 - **Atomic Line Interleaving**: Guarded child stdout chunk line-buffering to prevent synthetic error frames from corrupting child JSON-RPC responses (BUG-01).
 - **Headless Master Key Persistence**: Fixed master key reload from file in containerized/headless environments when OS keyring is unavailable (BUG-02).
 - **Migrate Prefix Collision Guard**: Automatically prefixed reserved server keys (`MCP_SENTINEL*`) with `SRV_` to avoid migration failures (BUG-03).
+- **Unicode Homoglyph & Trojan Source Defense**: Added deconfusing for Cyrillic, Greek, and full-width Latin homoglyphs in L7 tool firewall, and immediately fail-closed on zero-width spaces and bidi override controls to stop blacklist evasions (SEC-05).
+- **Environment Variable Placeholder Resolution in Migration**: Expanded `${env:VAR}`, `${VAR}`, and `$VAR` from current environment during `mcp-sentinel migrate` so actual secrets are securely migrated to vault instead of literal placeholder strings.
+- **Atomic Vault Registry Persistence**: Ensured `.vault_keys.json` writes use PID-tagged temporary files and atomic rename with 0600 permissions to prevent file corruption under concurrent operations.
+- **Proxy Lifecycle & Memory Safeguards**: Prevented background stdin worker leak when child terminates, safeguarded stdout buffer against unbounded memory growth (64KB), and resolved stdout writer busy-loop when synthetic error channel closes.
 
 ### 🛡️ Test Coverage & Quality
-- **90/90 automated tests passing** across Unit, Integration, Performance, Security Hacking, and Stress test suites.
+- **96/96 automated tests passing** across Unit, Integration, Performance, Security Hacking, and Stress test suites.
 - 0 compiler warnings, 0 clippy warnings, 100% rustfmt compliant.
 
 ---

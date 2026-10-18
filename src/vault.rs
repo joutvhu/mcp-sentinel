@@ -38,9 +38,9 @@ pub fn validate_key_name(key: &str) -> Result<(), String> {
     if key.len() > 128 {
         return Err("Secret key name cannot exceed 128 characters".to_string());
     }
-    if key.starts_with("__") || key.to_uppercase().starts_with("MCP_SENTINEL_") {
+    if key.starts_with("__") || key.to_uppercase().starts_with("MCP_SENTINEL") {
         return Err(format!(
-            "Secret key '{}' uses a reserved prefix ('__' or 'MCP_SENTINEL_')",
+            "Secret key '{}' uses a reserved prefix ('__' or 'MCP_SENTINEL')",
             key
         ));
     }
@@ -130,6 +130,20 @@ pub fn parse_specs(specs: &[String]) -> Result<Vec<SecretMapping>, String> {
     Ok(mappings)
 }
 
+fn save_vault_keys(path: &std::path::Path, keys: &BTreeSet<String>) {
+    if let Ok(json) = serde_json::to_string_pretty(keys) {
+        let tmp_path = path.with_extension(format!("{}.tmp", std::process::id()));
+        if fs::write(&tmp_path, json).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600));
+            }
+            let _ = fs::rename(&tmp_path, path);
+        }
+    }
+}
+
 fn register_key(key: &str) {
     if key.starts_with("__") {
         return;
@@ -137,14 +151,7 @@ fn register_key(key: &str) {
     if let Some(path) = get_vault_keys_file_path() {
         let mut keys: BTreeSet<String> = list_keys().into_iter().collect();
         keys.insert(key.to_string());
-        if let Ok(json) = serde_json::to_string_pretty(&keys) {
-            let _ = fs::write(&path, json);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
-            }
-        }
+        save_vault_keys(&path, &keys);
     }
 }
 
@@ -152,14 +159,7 @@ fn unregister_key(key: &str) {
     if let Some(path) = get_vault_keys_file_path() {
         let mut keys: BTreeSet<String> = list_keys().into_iter().collect();
         keys.remove(key);
-        if let Ok(json) = serde_json::to_string_pretty(&keys) {
-            let _ = fs::write(&path, json);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
-            }
-        }
+        save_vault_keys(&path, &keys);
     }
 }
 
@@ -193,14 +193,14 @@ mod tests {
 
     #[test]
     fn test_vault_roundtrip() {
-        let key = "MY_APP_VALID_SECRET_KEY";
+        let key = format!("MY_APP_VALID_KEY_{}", std::process::id());
         let val = "test_val_12345";
-        match set_secret(key, val) {
+        match set_secret(&key, val) {
             Ok(_) => {
-                let res_get = get_secret(key);
+                let res_get = get_secret(&key);
                 assert_eq!(res_get.unwrap(), val);
 
-                let res_del = delete_secret(key);
+                let res_del = delete_secret(&key);
                 assert!(res_del.is_ok());
             }
             Err(e) => {
