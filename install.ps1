@@ -58,15 +58,36 @@ $TempZip = Join-Path $env:TEMP "mcp-sentinel-windows.zip"
 Write-Host "Downloading $AssetFilename ($Version)..." -ForegroundColor Yellow
 Invoke-WebRequest -Uri $DownloadUrl -OutFile $TempZip -UseBasicParsing
 
+# Verify SHA-256 checksum if .sha256 asset is available
+$ShaUrl = "$DownloadUrl.sha256"
+try {
+    $ExpectedHashLine = (Invoke-RestMethod -Uri $ShaUrl -UseBasicParsing).Trim()
+    $ExpectedHash = ($ExpectedHashLine -split '\s+')[0].Trim().ToLower()
+    $ActualHash = (Get-FileHash -Path $TempZip -Algorithm SHA256).Hash.ToLower()
+    if ($ActualHash -ne $ExpectedHash) {
+        Remove-Item -Path $TempZip -Force
+        Write-Error "SHA-256 checksum mismatch! Expected: $ExpectedHash, Got: $ActualHash"
+        exit 1
+    }
+    Write-Host "✓ SHA-256 checksum verified." -ForegroundColor Green
+} catch {
+    # If .sha256 is not published yet or network fails, proceed with warning
+    Write-Host "Notice: Checksum asset not found, skipping checksum verification." -ForegroundColor DarkGray
+}
+
 Write-Host "Extracting binary..." -ForegroundColor Yellow
 Expand-Archive -Path $TempZip -DestinationPath $InstallDir -Force
 Remove-Item -Path $TempZip -Force
 
 # Add to User PATH if not present
 $UserPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
+if (-not $UserPath) {
+    $UserPath = ""
+}
 if ($UserPath -notlike "*$InstallDir*") {
     Write-Host "Adding $InstallDir to User PATH..." -ForegroundColor Yellow
-    [Environment]::SetEnvironmentVariable("Path", "$UserPath;$InstallDir", [EnvironmentVariableTarget]::User)
+    $NewPath = if ($UserPath.Trim().Length -gt 0) { "$($UserPath.TrimEnd(';'));$InstallDir" } else { $InstallDir }
+    [Environment]::SetEnvironmentVariable("Path", $NewPath, [EnvironmentVariableTarget]::User)
     $env:Path = "$env:Path;$InstallDir"
 }
 

@@ -182,6 +182,16 @@ async fn main() {
             let redact_secrets: Vec<String> = if no_redact {
                 Vec::new()
             } else {
+                for (target, val) in &secrets_map {
+                    if val.trim().len() < mcp_sentinel::redactor::MIN_SECRET_LEN {
+                        eprintln!(
+                            "[mcp-sentinel] Security Warning: Secret '{}' is shorter than {} characters ({} chars) and will NOT be masked by DLP on stdout.",
+                            target,
+                            mcp_sentinel::redactor::MIN_SECRET_LEN,
+                            val.trim().len()
+                        );
+                    }
+                }
                 secrets_map.values().cloned().collect()
             };
 

@@ -170,8 +170,18 @@ pub async fn run_child_and_pipe(
         let mut raw_buf = [0u8; 8192];
         loop {
             tokio::select! {
-                // Synthetic errors are only written at clean message/newline boundaries
-                Some(err_bytes) = err_rx.recv(), if child_buf.is_empty() => {
+                // Synthetic errors are written immediately, flushing any pending child output cleanly
+                Some(err_bytes) = err_rx.recv() => {
+                    if !child_buf.is_empty() {
+                        let needs_newline = child_buf.last() != Some(&b'\n');
+                        if host_stdout.write_all(&child_buf).await.is_err() {
+                            break;
+                        }
+                        if needs_newline && host_stdout.write_all(b"\n").await.is_err() {
+                            break;
+                        }
+                        child_buf.clear();
+                    }
                     if host_stdout.write_all(&err_bytes).await.is_err() {
                         break;
                     }

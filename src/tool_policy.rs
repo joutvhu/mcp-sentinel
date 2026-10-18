@@ -264,14 +264,18 @@ pub fn save_profiles(file: &ToolPolicyFile) -> Result<(), String> {
     let json = serde_json::to_string_pretty(&to_save)
         .map_err(|e| format!("Failed to serialize tool policy file: {}", e))?;
 
-    fs::write(&file_path, json)
-        .map_err(|e| format!("Failed to write {}: {}", file_path.display(), e))?;
+    let tmp_path = file_path.with_extension("tmp");
+    fs::write(&tmp_path, json)
+        .map_err(|e| format!("Failed to write {}: {}", tmp_path.display(), e))?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&file_path, fs::Permissions::from_mode(0o600));
+        let _ = fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600));
     }
+
+    fs::rename(&tmp_path, &file_path)
+        .map_err(|e| format!("Failed to atomically update {}: {}", file_path.display(), e))?;
 
     Ok(())
 }

@@ -96,6 +96,19 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 printf "\033[33mDownloading %s (%s)...\033[0m\n" "$ASSET_NAME" "$LATEST_TAG"
 curl -sSL "$DOWNLOAD_URL" -o "$TMP_DIR/$ASSET_NAME"
 
+# Verify SHA-256 checksum if .sha256 asset is available
+if curl -sSL -f "${DOWNLOAD_URL}.sha256" -o "$TMP_DIR/$ASSET_NAME.sha256" 2>/dev/null; then
+    printf "\033[33mVerifying SHA-256 checksum...\033[0m\n"
+    (
+        cd "$TMP_DIR"
+        if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum -c "$ASSET_NAME.sha256" >/dev/null 2>&1 || { printf "\033[31mError: SHA-256 checksum mismatch!\033[0m\n"; exit 1; }
+        elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 -c "$ASSET_NAME.sha256" >/dev/null 2>&1 || { printf "\033[31mError: SHA-256 checksum mismatch!\033[0m\n"; exit 1; }
+        fi
+    )
+fi
+
 printf "\033[33mExtracting to %s...\033[0m\n" "$INSTALL_DIR"
 tar -xzf "$TMP_DIR/$ASSET_NAME" -C "$TMP_DIR"
 mv "$TMP_DIR/$BIN_NAME" "$INSTALL_DIR/$BIN_NAME"

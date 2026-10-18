@@ -107,7 +107,23 @@ impl StreamRedactor {
         let mut buf = [0u8; 8192];
 
         loop {
-            let n = reader.read(&mut buf).await?;
+            let n = if !self.carryover.is_empty() {
+                // If carryover is held, wait briefly for immediate subsequent chunks.
+                // If child has finished its response and is idle (timeout), flush carryover so client is not stalled.
+                match tokio::time::timeout(std::time::Duration::from_millis(10), reader.read(&mut buf)).await {
+                    Ok(res) => res?,
+                    Err(_) => {
+                        let final_redacted = ac.replace_all_bytes(&self.carryover, &self.replacements);
+                        writer.write_all(&final_redacted).await?;
+                        writer.flush().await?;
+                        self.carryover.clear();
+                        continue;
+                    }
+                }
+            } else {
+                reader.read(&mut buf).await?
+            };
+
             if n == 0 {
                 // EOF: Process any remaining carryover bytes and flush completely
                 if !self.carryover.is_empty() {

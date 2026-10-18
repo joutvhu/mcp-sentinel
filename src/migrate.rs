@@ -365,6 +365,11 @@ pub fn migrate_file(
             let bak = file_path.with_extension("json.bak");
             fs::write(&bak, &content)
                 .map_err(|e| format!("Failed to create backup file '{}': {}", bak.display(), e))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&bak, fs::Permissions::from_mode(0o600));
+            }
             backup_path = Some(bak);
         }
 

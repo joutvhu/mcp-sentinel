@@ -22,7 +22,14 @@ pub fn sanitize_dialog_text(text: &str, max_len: usize) -> String {
     let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
 
     if collapsed.len() > max_len {
-        format!("{}...", &collapsed[..max_len.saturating_sub(3)])
+        let limit = max_len.saturating_sub(3);
+        let boundary = collapsed
+            .char_indices()
+            .map(|(idx, _)| idx)
+            .take_while(|&idx| idx <= limit)
+            .last()
+            .unwrap_or(0);
+        format!("{}...", &collapsed[..boundary])
     } else {
         collapsed
     }
@@ -114,7 +121,7 @@ pub fn ask_user_permission(command_name: &str, secrets: &[String]) -> AuthDecisi
             }
             MessageDialogResult::Custom(ref text) if text == "Deny" => AuthDecision::Deny,
             MessageDialogResult::Yes => AuthDecision::AllowAlways,
-            MessageDialogResult::No => AuthDecision::AllowOnce,
+            MessageDialogResult::No => AuthDecision::Deny,
             MessageDialogResult::Ok => AuthDecision::AllowAlways,
             MessageDialogResult::Cancel => AuthDecision::Deny,
             _ => AuthDecision::Deny,
@@ -174,5 +181,16 @@ mod tests {
         assert_eq!(decision, AuthDecision::Deny);
 
         std::env::remove_var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE");
+    }
+
+    #[test]
+    fn test_sanitize_dialog_text_multibyte_utf8() {
+        // Vietnamese characters with multi-byte accents
+        let input = "Thư mục bí mật chứa nhiều tài liệu quan trọng và khóa bí mật";
+        // Ensure no panic when max_len cuts in the middle of a 2-3 byte UTF-8 char
+        for len in 5..=60 {
+            let res = sanitize_dialog_text(input, len);
+            assert!(res.ends_with("...") || res == input);
+        }
     }
 }

@@ -82,12 +82,14 @@ pub fn get_or_create_master_key() -> Result<Vec<u8>, String> {
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
-    if let Some(key_path) = get_master_key_file_path() {
-        if key_path.exists() {
-            if let Ok(hex_str) = fs::read_to_string(&key_path) {
-                if let Ok(bytes) = hex::decode(hex_str.trim()) {
-                    let _ = MASTER_KEY_CACHE.set(bytes.clone());
-                    return Ok(bytes);
+    if allow_file {
+        if let Some(key_path) = get_master_key_file_path() {
+            if key_path.exists() {
+                if let Ok(hex_str) = fs::read_to_string(&key_path) {
+                    if let Ok(bytes) = hex::decode(hex_str.trim()) {
+                        let _ = MASTER_KEY_CACHE.set(bytes.clone());
+                        return Ok(bytes);
+                    }
                 }
             }
         }
@@ -184,12 +186,21 @@ pub fn load_policy() -> PolicyFile {
     }
 
     // Layer 2: Verify HMAC-SHA256 digital signature against file tampering
-    if let Ok(key) = get_or_create_master_key() {
-        let expected_sig = compute_grants_hmac(&parsed.grants, &key);
-        if parsed.signature.as_deref() != Some(&expected_sig) {
+    match get_or_create_master_key() {
+        Ok(key) => {
+            let expected_sig = compute_grants_hmac(&parsed.grants, &key);
+            if parsed.signature.as_deref() != Some(&expected_sig) {
+                eprintln!(
+                    "[mcp-sentinel] SECURITY ALERT: Policy file '{}' has been modified externally or tampered with! Signature mismatch. Discarding untrusted grants.",
+                    path.display()
+                );
+                return PolicyFile::default();
+            }
+        }
+        Err(e) => {
             eprintln!(
-                "[mcp-sentinel] SECURITY ALERT: Policy file '{}' has been modified externally or tampered with! Signature mismatch. Discarding untrusted grants.",
-                path.display()
+                "[mcp-sentinel] Security Warning: Master signing key unavailable ({}). Discarding unverified policy.",
+                e
             );
             return PolicyFile::default();
         }
@@ -208,14 +219,18 @@ pub fn save_policy(policy: &PolicyFile) -> Result<(), String> {
 
     let json = serde_json::to_string_pretty(&signed_policy)
         .map_err(|e| format!("Failed to serialize policy: {}", e))?;
-    fs::write(&path, json).map_err(|e| format!("Failed to write policy file: {}", e))?;
+
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, json).map_err(|e| format!("Failed to write policy file: {}", e))?;
 
     // Layer 1: Restrict file permissions to 0600 on Unix (owner read/write only)
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        let _ = fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600));
     }
+
+    fs::rename(&tmp_path, &path).map_err(|e| format!("Failed to atomically update policy file: {}", e))?;
 
     Ok(())
 }
