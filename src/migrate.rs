@@ -314,8 +314,19 @@ pub fn transform_config_json(
         new_args.push(orig_cmd.clone());
         new_args.extend(orig_args);
 
-        // Update JSON
-        server_obj.insert("command".to_string(), json!("mcp-sentinel"));
+        // Update JSON with absolute path to mcp-sentinel binary to prevent spawn ENOENT in GUI apps
+        let sentinel_bin = std::env::current_exe()
+            .ok()
+            .and_then(|p| {
+                let file_name = p.file_name()?.to_str()?;
+                if file_name == "mcp-sentinel" || file_name == "mcp-sentinel.exe" {
+                    Some(p.to_string_lossy().to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "mcp-sentinel".to_string());
+        server_obj.insert("command".to_string(), json!(sentinel_bin));
         server_obj.insert("args".to_string(), json!(new_args));
         server_obj.remove("env"); // Remove plaintext secrets from disk!
 

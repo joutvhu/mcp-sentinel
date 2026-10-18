@@ -230,7 +230,8 @@ pub fn save_policy(policy: &PolicyFile) -> Result<(), String> {
         let _ = fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600));
     }
 
-    fs::rename(&tmp_path, &path).map_err(|e| format!("Failed to atomically update policy file: {}", e))?;
+    fs::rename(&tmp_path, &path)
+        .map_err(|e| format!("Failed to atomically update policy file: {}", e))?;
 
     Ok(())
 }

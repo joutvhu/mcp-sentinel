@@ -183,33 +183,13 @@ fn compute_file_signature(profiles: &HashMap<String, ToolProfile>) -> Result<Str
     let mut mac = HmacSha256::new_from_slice(&master_key)
         .map_err(|e| format!("HMAC initialization failed: {}", e))?;
 
-    // Sort profile names deterministically
-    let mut keys: Vec<&String> = profiles.keys().collect();
-    keys.sort();
+    // Sort profile names deterministically and canonicalize via JSON to prevent delimiter collisions
+    let mut sorted_profiles: Vec<(&String, &ToolProfile)> = profiles.iter().collect();
+    sorted_profiles.sort_by_key(|&(k, _)| k);
 
-    for key in keys {
-        let p = &profiles[key];
-        mac.update(p.name.as_bytes());
-        mac.update(b"|");
-        if let Some(ref desc) = p.description {
-            mac.update(desc.as_bytes());
-        }
-        mac.update(b"|ALLOW:");
-        let mut sorted_allow = p.allow.clone();
-        sorted_allow.sort();
-        for a in &sorted_allow {
-            mac.update(a.as_bytes());
-            mac.update(b",");
-        }
-        mac.update(b"|DENY:");
-        let mut sorted_deny = p.deny.clone();
-        sorted_deny.sort();
-        for d in &sorted_deny {
-            mac.update(d.as_bytes());
-            mac.update(b",");
-        }
-        mac.update(b"\n");
-    }
+    let serialized = serde_json::to_vec(&sorted_profiles)
+        .map_err(|e| format!("Failed to serialize profiles for signing: {}", e))?;
+    mac.update(&serialized);
 
     let result = mac.finalize();
     Ok(hex::encode(result.into_bytes()))

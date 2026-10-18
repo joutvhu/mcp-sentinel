@@ -1141,3 +1141,63 @@ fn hack_test_migrate_server_name_with_mcp_sentinel_prefix() {
         "mcp-sentinel"
     );
 }
+
+/// HACK ATTACK 22: Layer 7 Tool Firewall Fail-Closed on Malformed Tool Name
+/// An attacker or prompt injection crafts a `tools/call` request with missing or non-string `params.name`.
+/// The L7 firewall must fail-closed, blocking the request with code -32602 instead of allowing it through.
+#[test]
+fn hack_test_layer7_tool_firewall_blocks_malformed_name_call() {
+    use std::io::Write;
+    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+
+    let server_script = r#"
+        const readline = require('readline');
+        const rl = readline.createInterface({ input: process.stdin });
+        rl.on('line', (line) => {
+            console.log(JSON.stringify({ jsonrpc: '2.0', id: 99, result: { executed: 'MALICIOUS_EXECUTION' } }));
+        });
+    "#;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args([
+            "run",
+            "--profile",
+            "read-only",
+            "--",
+            "node",
+            "-e",
+            server_script,
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn mcp-sentinel");
+
+    {
+        let stdin = child.stdin.as_mut().expect("Failed to open child stdin");
+        // Request declaring tools/call but missing params.name
+        let malformed_req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "tools/call",
+            "params": { "not_name": "delete_database" }
+        });
+        writeln!(stdin, "{}", malformed_req).unwrap();
+    }
+
+    let output = child.wait_with_output().expect("Failed to read output");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Must be intercepted with -32602 error
+    assert!(
+        stdout.contains("\"code\":-32602"),
+        "Malformed tools/call must be intercepted with code -32602! Stdout: {}",
+        stdout
+    );
+    // Must NOT reach child process
+    assert!(
+        !stdout.contains("MALICIOUS_EXECUTION"),
+        "Child process must NEVER execute when tools/call has malformed name! Stdout: {}",
+        stdout
+    );
+}

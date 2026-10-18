@@ -33,6 +33,7 @@ const SAFE_KEYS: &[&str] = &[
     "NODE_EXTRA_CA_CERTS",
     "REQUESTS_CA_BUNDLE",
     "CURL_CA_BUNDLE",
+    "VIRTUAL_ENV",
 ];
 
 #[cfg(unix)]

@@ -108,12 +108,20 @@ impl StreamRedactor {
 
         loop {
             let n = if !self.carryover.is_empty() {
-                // If carryover is held, wait briefly for immediate subsequent chunks.
+                // If carryover is held, wait for subsequent chunks.
+                // 500ms timeout accommodates token-by-token streaming (e.g. LLM generation or network latency)
+                // without prematurely cutting off and leaking partial secret prefixes.
                 // If child has finished its response and is idle (timeout), flush carryover so client is not stalled.
-                match tokio::time::timeout(std::time::Duration::from_millis(10), reader.read(&mut buf)).await {
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(500),
+                    reader.read(&mut buf),
+                )
+                .await
+                {
                     Ok(res) => res?,
                     Err(_) => {
-                        let final_redacted = ac.replace_all_bytes(&self.carryover, &self.replacements);
+                        let final_redacted =
+                            ac.replace_all_bytes(&self.carryover, &self.replacements);
                         writer.write_all(&final_redacted).await?;
                         writer.flush().await?;
                         self.carryover.clear();
@@ -310,5 +318,43 @@ mod tests {
         let output = redactor.redact_bytes(json_input);
         let output_str = String::from_utf8(output).unwrap();
         assert_eq!(output_str, r#"{"data": "[REDACTED_BY_SENTINEL]"}"#);
+    }
+
+    #[tokio::test]
+    async fn test_redactor_streaming_slow_token_split() {
+        let secrets = vec!["sk-ant-api03-verylongsecretkey12345".to_string()];
+        let mut redactor = StreamRedactor::new(&secrets);
+
+        // Split secret across chunks with a 50ms pause (e.g. LLM streaming token arrival)
+        let chunk1 = b"Partial text: sk-ant-";
+        let chunk2 = b"api03-verylongsecretkey12345 trailing info";
+
+        let (mut client_writer, server_reader) = tokio::io::duplex(1024);
+        let (output_reader, mut host_writer) = tokio::io::duplex(1024);
+
+        let pipe_task = tokio::spawn(async move {
+            redactor
+                .pipe_and_redact(server_reader, &mut host_writer)
+                .await
+        });
+
+        client_writer.write_all(chunk1).await.unwrap();
+        // 50ms pause exceeds old 10ms timeout but is safely inside 500ms window
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        client_writer.write_all(chunk2).await.unwrap();
+        drop(client_writer);
+
+        pipe_task.await.unwrap().unwrap();
+
+        let mut output_bytes = Vec::new();
+        let mut reader = output_reader;
+        reader.read_to_end(&mut output_bytes).await.unwrap();
+
+        let output_str = String::from_utf8(output_bytes).unwrap();
+        assert_eq!(
+            output_str,
+            "Partial text: [REDACTED_BY_SENTINEL] trailing info"
+        );
     }
 }

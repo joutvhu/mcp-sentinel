@@ -15,10 +15,44 @@ fn check_single_tool_request(
         return None;
     }
 
-    let tool_name = req
+    let tool_name = match req
         .get("params")
         .and_then(|p| p.get("name"))
-        .and_then(|n| n.as_str())?;
+        .and_then(|n| n.as_str())
+    {
+        Some(name) => name,
+        None => {
+            // Fail-closed: The request declares method "tools/call" but parameter 'name' is missing or not a string
+            eprintln!(
+                "[mcp-sentinel] Security Violation: Blocked malformed tool call missing valid 'name' parameter"
+            );
+
+            if audit_enabled {
+                let _ = crate::audit::log_event(&crate::audit::AuditEntry {
+                    timestamp: chrono::Utc::now(),
+                    event: crate::audit::AuditEventType::ToolCallBlocked,
+                    server_name: Some(server_name.to_string()),
+                    command: None,
+                    tool_name: Some("<MALFORMED_NAME>".to_string()),
+                    decision: Some("BLOCKED".to_string()),
+                    reason: Some("Missing or non-string 'params.name' parameter".to_string()),
+                    secrets: None,
+                    profile: tool_profile.as_ref().map(|p| p.name.clone()),
+                    exit_code: None,
+                });
+            }
+
+            let id = req.get("id").cloned().unwrap_or(serde_json::Value::Null);
+            return Some(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32602,
+                    "message": "[MCP-SENTINEL] Malformed tool call: 'params.name' string parameter is required."
+                }
+            }));
+        }
+    };
 
     if let Some(ref profile) = tool_profile {
         let decision = crate::tool_policy::evaluate_tool_call(tool_name, profile);

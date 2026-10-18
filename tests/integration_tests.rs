@@ -160,7 +160,16 @@ fn test_cli_migrate_file_end_to_end() {
     let content_migrated = fs::read_to_string(&config_file).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&content_migrated).unwrap();
     let server = &parsed["mcpServers"]["test_sqlite"];
-    assert_eq!(server["command"], "mcp-sentinel");
+    let cmd_str = server["command"].as_str().unwrap();
+    assert!(
+        cmd_str == "mcp-sentinel"
+            || cmd_str.ends_with("/mcp-sentinel")
+            || cmd_str.ends_with("\\mcp-sentinel")
+            || cmd_str.ends_with("/mcp-sentinel.exe")
+            || cmd_str.ends_with("\\mcp-sentinel.exe"),
+        "Migrated command must be mcp-sentinel or full binary path! Got: {}",
+        cmd_str
+    );
     assert!(server.get("env").is_none());
 
     let args = server["args"].as_array().unwrap();
