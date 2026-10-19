@@ -247,7 +247,7 @@ pub async fn run_child_and_pipe(
                                 let _ = host_stdout.flush().await;
                                 stdout_at_newline = true;
                                 child_buf.drain(..=last_nl);
-                            } else if child_buf.len() >= 65536 {
+                            } else if child_buf.len() >= 2 * 1024 * 1024 {
                                 // Safeguard against unbounded memory growth if child sends massive stream without newline
                                 let ends_with_nl = child_buf.last() == Some(&b'\n');
                                 if host_stdout.write_all(&child_buf).await.is_err() {

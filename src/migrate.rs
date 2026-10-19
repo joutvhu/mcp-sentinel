@@ -220,14 +220,133 @@ fn resolve_env_placeholder(val: &str) -> String {
     val.to_string()
 }
 
+/// Strips single-line (`// ...`) and multi-line (`/* ... */`) comments from a JSON string,
+/// preserving comment-like sequences inside string literals and keeping newlines intact.
+pub fn strip_jsonc_comments(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let len = bytes.len();
+    let mut out = Vec::with_capacity(len);
+    let mut i = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while i < len {
+        if in_string {
+            let b = bytes[i];
+            out.push(b);
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            i += 1;
+        } else if bytes[i] == b'"' {
+            in_string = true;
+            out.push(b'"');
+            i += 1;
+        } else if bytes[i] == b'/' && i + 1 < len && bytes[i + 1] == b'/' {
+            // Line comment: skip until newline or EOF
+            i += 2;
+            while i < len && bytes[i] != b'\n' {
+                i += 1;
+            }
+        } else if bytes[i] == b'/' && i + 1 < len && bytes[i + 1] == b'*' {
+            // Block comment: skip until */ or EOF
+            i += 2;
+            while i + 1 < len && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                if bytes[i] == b'\n' {
+                    out.push(b'\n'); // Preserve line breaks for accurate error reporting
+                }
+                i += 1;
+            }
+            if i + 1 < len {
+                i += 2; // skip */
+            } else {
+                i = len; // unclosed comment at EOF
+            }
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+
+    String::from_utf8(out).unwrap_or_else(|_| input.to_string())
+}
+
+/// Strips trailing commas before `}` or `]` from a comment-free JSON string.
+pub fn strip_trailing_commas(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let len = bytes.len();
+    let mut out = Vec::with_capacity(len);
+    let mut i = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while i < len {
+        if in_string {
+            let b = bytes[i];
+            out.push(b);
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            i += 1;
+        } else {
+            let b = bytes[i];
+            if b == b'"' {
+                in_string = true;
+                out.push(b);
+                i += 1;
+            } else if b == b',' {
+                // Lookahead past ASCII whitespace and redundant commas
+                let mut j = i + 1;
+                while j < len
+                    && (bytes[j] == b' '
+                        || bytes[j] == b'\t'
+                        || bytes[j] == b'\r'
+                        || bytes[j] == b'\n'
+                        || bytes[j] == b',')
+                {
+                    j += 1;
+                }
+                if j < len && (bytes[j] == b'}' || bytes[j] == b']') {
+                    // Trailing comma before closing brace/bracket: drop it
+                    i += 1;
+                } else {
+                    out.push(b);
+                    i += 1;
+                }
+            } else {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+
+    String::from_utf8(out).unwrap_or_else(|_| input.to_string())
+}
+
+/// Preprocesses JSONC text by removing line comments (`//`), block comments (`/* */`),
+/// and trailing commas, making it valid standard JSON for `serde_json`.
+pub fn clean_jsonc(input: &str) -> String {
+    let stripped = strip_jsonc_comments(input);
+    strip_trailing_commas(&stripped)
+}
+
 /// Transforms raw JSON content: extracts plaintext secrets into OS vault, wraps commands with mcp-sentinel,
 /// and strips plaintext env vars from the JSON.
 pub fn transform_config_json(
     json_str: &str,
     dry_run: bool,
 ) -> Result<(String, Vec<ServerMigrationResult>), String> {
+    let cleaned = clean_jsonc(json_str);
     let mut root: Value =
-        serde_json::from_str(json_str).map_err(|e| format!("Invalid JSON configuration: {}", e))?;
+        serde_json::from_str(&cleaned).map_err(|e| format!("Invalid JSON configuration: {}", e))?;
 
     let servers = root
         .get_mut("mcpServers")
@@ -615,5 +734,74 @@ mod tests {
         let _ = fs::remove_file(&bak);
         let _ = fs::remove_dir(&temp_dir);
         let _ = crate::vault::delete_secret("TEST_MIGRATE_KEY");
+    }
+
+    #[test]
+    fn test_strip_jsonc_comments_and_trailing_commas() {
+        let jsonc = r#"// Top-level comment
+        {
+            /* Block comment on servers */
+            "mcpServers": {
+                // Line comment for server
+                "github": {
+                    "command": "npx", // Inline comment
+                    "args": [
+                        "-y",
+                        "@modelcontextprotocol/server-github", /* inline block */
+                    ],
+                    "env": {
+                        "GITHUB_TOKEN": "ghp_mock_123456",
+                        "URL": "https://example.com/api//v1/*not_a_comment*/",
+                        "ESCAPED": "say \"hello // world\"",
+                    },
+                },
+            },
+        }
+        // Bottom-level comment"#;
+
+        let cleaned = clean_jsonc(jsonc);
+        let parsed: Result<Value, _> = serde_json::from_str(&cleaned);
+        assert!(parsed.is_ok(), "Failed to parse cleaned JSONC: {:?}", parsed.err());
+
+        let val = parsed.unwrap();
+        assert_eq!(
+            val["mcpServers"]["github"]["env"]["URL"],
+            "https://example.com/api//v1/*not_a_comment*/"
+        );
+        assert_eq!(
+            val["mcpServers"]["github"]["env"]["ESCAPED"],
+            "say \"hello // world\""
+        );
+    }
+
+    #[test]
+    fn test_transform_config_json_with_jsonc() {
+        let jsonc = r#"{
+            // Server configuration with comments and trailing commas
+            "mcpServers": {
+                /* Postgres database */
+                "postgres": {
+                    "command": "npx",
+                    "args": [
+                        "-y",
+                        "@modelcontextprotocol/server-postgres",
+                    ], // trailing comma in args
+                    "env": {
+                        "DATABASE_URL": "postgresql://user:pass@localhost:5432/db", // line comment
+                    }, // trailing comma in env
+                },
+            }, // trailing comma in mcpServers
+        }"#;
+
+        let (output_json, results) = transform_config_json(jsonc, true).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].server_name, "postgres");
+        assert_eq!(results[0].extracted_secrets, vec!["DATABASE_URL"]);
+        assert!(!results[0].already_migrated);
+
+        let parsed: Value = serde_json::from_str(&output_json).unwrap();
+        let pg = &parsed["mcpServers"]["postgres"];
+        assert_eq!(pg["command"], "mcp-sentinel");
+        assert!(pg.get("env").is_none());
     }
 }
