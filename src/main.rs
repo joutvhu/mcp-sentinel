@@ -74,7 +74,7 @@ async fn main() {
                     &fingerprint[..12]
                 );
 
-                let decision = dialog::ask_user_permission(&display_name, &display_labels);
+                let decision = dialog::ask_user_permission(&cmd, name.as_deref(), &display_labels);
                 match decision {
                     dialog::AuthDecision::Deny => {
                         eprintln!(

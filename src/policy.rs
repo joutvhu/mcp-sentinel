@@ -65,15 +65,22 @@ fn get_master_key_file_path() -> Option<PathBuf> {
 /// Retrieves or securely generates a 256-bit signing key inside the OS Keyring,
 /// with a protected fallback for headless / CI environments without a keyring daemon.
 pub fn get_or_create_master_key() -> Result<Vec<u8>, String> {
-    if let Some(key) = MASTER_KEY_CACHE.get() {
-        return Ok(key.clone());
-    }
+    #[cfg(any(test, debug_assertions))]
+    let mock_keyring_unavailable = std::env::var("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE").is_ok();
+    #[cfg(not(any(test, debug_assertions)))]
+    let mock_keyring_unavailable = false;
 
-    // 1. Try retrieving from OS Keyring first (Primary secure hardware/OS enclave)
-    if let Ok(hex_str) = crate::vault::get_secret(MASTER_SIGNING_KEY_NAME) {
-        if let Ok(bytes) = hex::decode(&hex_str) {
-            let _ = MASTER_KEY_CACHE.set(bytes.clone());
-            return Ok(bytes);
+    if !mock_keyring_unavailable {
+        if let Some(key) = MASTER_KEY_CACHE.get() {
+            return Ok(key.clone());
+        }
+
+        // 1. Try retrieving from OS Keyring first (Primary secure hardware/OS enclave)
+        if let Ok(hex_str) = crate::vault::get_secret(MASTER_SIGNING_KEY_NAME) {
+            if let Ok(bytes) = hex::decode(&hex_str) {
+                let _ = MASTER_KEY_CACHE.set(bytes.clone());
+                return Ok(bytes);
+            }
         }
     }
 
@@ -105,21 +112,33 @@ pub fn get_or_create_master_key() -> Result<Vec<u8>, String> {
     let hex_key = hex::encode(key_bytes);
 
     // Save to OS Keyring as the primary enclave
-    let keyring_saved = crate::vault::set_secret(MASTER_SIGNING_KEY_NAME, &hex_key).is_ok();
+    let keyring_saved = if mock_keyring_unavailable {
+        false
+    } else {
+        crate::vault::set_secret(MASTER_SIGNING_KEY_NAME, &hex_key).is_ok()
+    };
 
     // Only write to local file if disk keyfile fallback is explicitly permitted
+    let mut file_saved = false;
     if allow_file {
         if let Some(key_path) = get_master_key_file_path() {
-            let _ = fs::write(&key_path, &hex_key);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600));
+            if fs::write(&key_path, &hex_key).is_ok() {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600));
+                }
+                file_saved = true;
             }
         }
-    } else if !keyring_saved {
-        eprintln!(
-            "[mcp-sentinel] Security Warning: OS Keyring is unavailable. Set MCP_SENTINEL_ALLOW_INSECURE_KEYFILE=1 to enable disk keyfile fallback in headless environments."
+    }
+
+    if !keyring_saved && !file_saved {
+        return Err(
+            "OS Keyring is unavailable and disk keyfile fallback is disabled. \
+            Cannot securely persist master signing key. In headless environments, \
+            set MCP_SENTINEL_ALLOW_INSECURE_KEYFILE=1 to enable disk keyfile fallback."
+                .to_string(),
         );
     }
 
@@ -217,9 +236,8 @@ pub fn save_policy(policy: &PolicyFile) -> Result<(), String> {
     let path = get_policy_file_path()?;
 
     let mut signed_policy = policy.clone();
-    if let Ok(key) = get_or_create_master_key() {
-        signed_policy.signature = Some(compute_grants_hmac(&policy.grants, &key));
-    }
+    let key = get_or_create_master_key()?;
+    signed_policy.signature = Some(compute_grants_hmac(&policy.grants, &key));
 
     let json = serde_json::to_string_pretty(&signed_policy)
         .map_err(|e| format!("Failed to serialize policy: {}", e))?;
@@ -305,6 +323,8 @@ pub fn reset_grants() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_compute_fingerprint_deterministic() {
@@ -335,6 +355,7 @@ mod tests {
 
     #[test]
     fn test_grant_lifecycle() {
+        let _lock = TEST_LOCK.lock().unwrap();
         let cmd = vec!["node".to_string(), "server.js".to_string()];
         let fp = compute_fingerprint(&cmd);
         let secrets = vec!["TEST_API_KEY".to_string()];
@@ -406,5 +427,38 @@ mod tests {
         let forged_key = b"attacker_forged_key_000000000000";
         let forged_sig = compute_grants_hmac(&tampered_grants, forged_key);
         assert_ne!(sig, forged_sig, "Forged key signature cannot match!");
+    }
+
+    #[test]
+    fn test_master_key_fail_closed_when_keyring_unavailable() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        std::env::set_var("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE", "1");
+        std::env::remove_var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE");
+
+        let res = get_or_create_master_key();
+        assert!(res.is_err());
+        let err_msg = res.unwrap_err();
+        assert!(err_msg.contains("OS Keyring is unavailable and disk keyfile fallback is disabled"));
+
+        // If allow insecure keyfile is set, it succeeds using fallback file in config dir
+        let temp_dir = std::env::temp_dir().join(format!("sentinel_test_policy_keyfile_{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp_dir);
+        std::env::set_var("MCP_SENTINEL_CONFIG_DIR", temp_dir.to_str().unwrap());
+        std::env::set_var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE", "1");
+
+        let res_fallback = get_or_create_master_key();
+        assert!(res_fallback.is_ok());
+        let key = res_fallback.unwrap();
+        assert_eq!(key.len(), 32);
+
+        // Verify keyfile exists on disk
+        let key_file = temp_dir.join(".master_key");
+        assert!(key_file.exists());
+
+        // Cleanup
+        std::env::remove_var("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE");
+        std::env::remove_var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE");
+        std::env::remove_var("MCP_SENTINEL_CONFIG_DIR");
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

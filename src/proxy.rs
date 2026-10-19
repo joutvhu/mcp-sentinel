@@ -3,6 +3,8 @@ use std::process::Stdio;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
+pub const MAX_IN_BUF_SIZE: usize = 4 * 1024 * 1024; // 4 MB
+
 /// Evaluates a single JSON-RPC request object against the active tool policy.
 /// Returns Some(error_response_value) if blocked, None if allowed.
 fn check_single_tool_request(
@@ -291,6 +293,15 @@ pub async fn run_child_and_pipe(
                     Err(_) => break,
                 };
                 in_buf.extend_from_slice(&read_buf[..n]);
+
+                if in_buf.len() > MAX_IN_BUF_SIZE {
+                    eprintln!(
+                        "[mcp-sentinel] Security Alert: Stdin buffer exceeded max capacity ({} bytes). Terminating input stream to prevent memory exhaustion DoS.",
+                        MAX_IN_BUF_SIZE
+                    );
+                    in_buf.clear();
+                    break;
+                }
 
                 loop {
                     // Skip leading whitespace

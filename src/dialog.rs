@@ -49,7 +49,11 @@ pub enum AuthDecision {
 /// - [Deny]: Rejects access and terminates the process.
 ///
 /// Includes a 30-second timeout to prevent locking host IDEs/clients indefinitely.
-pub fn ask_user_permission(command_name: &str, secrets: &[String]) -> AuthDecision {
+pub fn ask_user_permission(
+    full_cmd: &[String],
+    server_name: Option<&str>,
+    secrets: &[String],
+) -> AuthDecision {
     // Check mock test variable first if present (only in test or debug builds)
     #[cfg(any(test, debug_assertions))]
     if let Ok(mock) = std::env::var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE") {
@@ -90,19 +94,29 @@ pub fn ask_user_permission(command_name: &str, secrets: &[String]) -> AuthDecisi
         return AuthDecision::Deny;
     }
 
-    let safe_command = sanitize_dialog_text(command_name, 120);
+    let binary = full_cmd.first().map(|s| s.as_str()).unwrap_or("<unknown>");
+    let safe_binary = sanitize_dialog_text(binary, 60);
+    let raw_full_cmd = full_cmd.join(" ");
+    let safe_full_cmd = sanitize_dialog_text(&raw_full_cmd, 150);
     let raw_secrets = secrets.join(", ");
     let safe_secrets = sanitize_dialog_text(&raw_secrets, 240);
 
+    let server_line = if let Some(name) = server_name {
+        format!("Server: {}\n", sanitize_dialog_text(name, 60))
+    } else {
+        String::new()
+    };
+
     let message = format!(
         "MCP Server is requesting access to environment secrets:\n\n\
-        Command: {}\n\
+        {}Binary: {}\n\
+        Full Command: {}\n\
         Requested Secrets: [{}]\n\n\
         Do you authorize this MCP server to access these secrets?\n\
         - [Allow Always]: Authorize and remember for future sessions\n\
         - [Allow Once]: Authorize for this run only (do not remember)\n\
         - [Deny]: Reject access and terminate",
-        safe_command, safe_secrets
+        server_line, safe_binary, safe_full_cmd, safe_secrets
     );
 
     let (tx, rx) = mpsc::channel();
@@ -178,16 +192,17 @@ mod tests {
 
     #[test]
     fn test_mock_dialog_response() {
+        let dummy_cmd = vec!["dummy_cmd".to_string(), "--arg".to_string()];
         std::env::set_var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE", "allow_once");
-        let decision = ask_user_permission("dummy_cmd", &["KEY1".to_string()]);
+        let decision = ask_user_permission(&dummy_cmd, Some("test_server"), &["KEY1".to_string()]);
         assert_eq!(decision, AuthDecision::AllowOnce);
 
         std::env::set_var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE", "allow_always");
-        let decision = ask_user_permission("dummy_cmd", &["KEY1".to_string()]);
+        let decision = ask_user_permission(&dummy_cmd, None, &["KEY1".to_string()]);
         assert_eq!(decision, AuthDecision::AllowAlways);
 
         std::env::set_var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE", "deny");
-        let decision = ask_user_permission("dummy_cmd", &["KEY1".to_string()]);
+        let decision = ask_user_permission(&dummy_cmd, Some("test_server"), &["KEY1".to_string()]);
         assert_eq!(decision, AuthDecision::Deny);
 
         std::env::remove_var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE");
@@ -202,5 +217,17 @@ mod tests {
             let res = sanitize_dialog_text(input, len);
             assert!(res.ends_with("...") || res == input);
         }
+    }
+
+    #[test]
+    fn test_ask_user_permission_with_long_command() {
+        let long_args: Vec<String> = (0..50).map(|i| format!("--argument-{}", i)).collect();
+        let mut cmd = vec!["npx".to_string()];
+        cmd.extend(long_args);
+
+        std::env::set_var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE", "allow_once");
+        let decision = ask_user_permission(&cmd, Some("my_server"), &["SECRET_1".to_string()]);
+        assert_eq!(decision, AuthDecision::AllowOnce);
+        std::env::remove_var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE");
     }
 }

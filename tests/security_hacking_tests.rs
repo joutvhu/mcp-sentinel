@@ -1404,3 +1404,56 @@ fn hack_test_jsonrpc_stream_framing_integrity_on_interleaved_synthetic_error() {
     assert_eq!(child_json["result"]["completed"], true);
 }
 
+/// HACK ATTACK 25: Stdin Buffer Unbounded Memory Exhaustion DoS Protection (SEC-DOS)
+/// An attacker or rogue client streams an endless payload into stdin without valid JSON delimiters or newlines.
+/// Sentinel must enforce MAX_IN_BUF_SIZE (4 MB), log a security alert to stderr, and terminate the input stream.
+#[test]
+fn hack_test_stdin_buffer_dos_protection() {
+    use std::io::Write;
+    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+
+    let server_script = r#"
+        const readline = require('readline');
+        const rl = readline.createInterface({ input: process.stdin });
+        rl.on('line', () => {});
+    "#;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args([
+            "run",
+            "--profile",
+            "read-only",
+            "--",
+            "node",
+            "-e",
+            server_script,
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn mcp-sentinel");
+
+    {
+        let stdin = child.stdin.as_mut().expect("Failed to open child stdin");
+        // Stream slightly more than 4MB of non-newline data
+        let chunk = vec![b'a'; 64 * 1024]; // 64 KB chunk
+        for _ in 0..70 {
+            // 70 * 64 KB = 4.48 MB > 4 MB
+            if stdin.write_all(&chunk).is_err() {
+                break;
+            }
+        }
+        let _ = stdin.flush();
+    }
+
+    let output = child.wait_with_output().expect("Failed to read output");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("Security Alert: Stdin buffer exceeded max capacity"),
+        "Must alert on stdin buffer exceeding max capacity! Actual stderr: {}",
+        stderr
+    );
+}
+
