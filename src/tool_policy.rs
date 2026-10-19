@@ -38,6 +38,11 @@ pub fn get_tool_policies_file_path() -> Result<PathBuf, String> {
     Ok(config_dir.join(TOOL_POLICIES_FILE_NAME))
 }
 
+pub fn get_tool_policies_lock_path() -> Result<PathBuf, String> {
+    let config_dir = crate::policy::get_config_dir()?;
+    Ok(config_dir.join(format!("{}.lock", TOOL_POLICIES_FILE_NAME)))
+}
+
 /// Returns the built-in preset tool profiles.
 pub fn default_preset_profiles() -> HashMap<String, ToolProfile> {
     let mut map = HashMap::new();
@@ -265,16 +270,27 @@ fn compute_file_signature(profiles: &HashMap<String, ToolProfile>) -> Result<Str
     Ok(hex::encode(result.into_bytes()))
 }
 
-/// Loads tool profiles from disk, verifying the cryptographic HMAC signature.
-/// If no file exists, initializes with default preset profiles.
-pub fn load_profiles() -> Result<ToolPolicyFile, String> {
+/// Saves tool profiles to disk without acquiring the file lock (caller must hold lock or initialization guard).
+pub fn save_profiles_unlocked(file: &ToolPolicyFile) -> Result<(), String> {
+    let file_path = get_tool_policies_file_path()?;
+    let mut to_save = file.clone();
+    to_save.signature = Some(compute_file_signature(&to_save.profiles)?);
+
+    let json = serde_json::to_string_pretty(&to_save)
+        .map_err(|e| format!("Failed to serialize tool policy file: {}", e))?;
+
+    crate::lock::atomic_write_and_rename(&file_path, json.as_bytes())
+}
+
+/// Loads tool profiles from disk without acquiring the file lock.
+pub fn load_profiles_unlocked() -> Result<ToolPolicyFile, String> {
     let file_path = get_tool_policies_file_path()?;
     if !file_path.exists() {
         let file = ToolPolicyFile {
             profiles: default_preset_profiles(),
             signature: None,
         };
-        let _ = save_profiles(&file);
+        save_profiles_unlocked(&file)?;
         return Ok(file);
     }
 
@@ -299,35 +315,50 @@ pub fn load_profiles() -> Result<ToolPolicyFile, String> {
                 profiles: default_preset_profiles(),
                 signature: None,
             };
-            let _ = save_profiles(&fallback);
+            save_profiles_unlocked(&fallback)?;
             Ok(fallback)
         }
     }
 }
 
-/// Saves tool profiles to disk, computing and attaching an HMAC-SHA256 signature.
-pub fn save_profiles(file: &ToolPolicyFile) -> Result<(), String> {
+/// Loads tool profiles from disk, verifying the cryptographic HMAC signature.
+/// Uses double-checked locking to avoid initialization race conditions across processes.
+pub fn load_profiles() -> Result<ToolPolicyFile, String> {
     let file_path = get_tool_policies_file_path()?;
-    let mut to_save = file.clone();
-    to_save.signature = Some(compute_file_signature(&to_save.profiles)?);
-
-    let json = serde_json::to_string_pretty(&to_save)
-        .map_err(|e| format!("Failed to serialize tool policy file: {}", e))?;
-
-    let tmp_path = file_path.with_extension(format!("{}.tmp", std::process::id()));
-    fs::write(&tmp_path, json)
-        .map_err(|e| format!("Failed to write {}: {}", tmp_path.display(), e))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600));
+    if !file_path.exists() {
+        let lock_path = get_tool_policies_lock_path()?;
+        let _lock = crate::lock::FileLock::acquire(&lock_path)?;
+        return load_profiles_unlocked();
     }
 
-    fs::rename(&tmp_path, &file_path)
-        .map_err(|e| format!("Failed to atomically update {}: {}", file_path.display(), e))?;
+    match load_profiles_unlocked() {
+        Ok(file) => Ok(file),
+        Err(e) => {
+            let lock_path = get_tool_policies_lock_path()?;
+            let _lock = crate::lock::FileLock::acquire(&lock_path)?;
+            load_profiles_unlocked().map_err(|_| e)
+        }
+    }
+}
 
-    Ok(())
+/// Modifies tool profiles within an atomic Read-Modify-Write cycle guarded by a cross-process lock.
+pub fn modify_profiles<F, R>(op: F) -> Result<R, String>
+where
+    F: FnOnce(&mut ToolPolicyFile) -> Result<R, String>,
+{
+    let lock_path = get_tool_policies_lock_path()?;
+    let _lock = crate::lock::FileLock::acquire(&lock_path)?;
+    let mut file = load_profiles_unlocked()?;
+    let result = op(&mut file)?;
+    save_profiles_unlocked(&file)?;
+    Ok(result)
+}
+
+/// Saves tool profiles to disk, computing and attaching an HMAC-SHA256 signature under lock.
+pub fn save_profiles(file: &ToolPolicyFile) -> Result<(), String> {
+    let lock_path = get_tool_policies_lock_path()?;
+    let _lock = crate::lock::FileLock::acquire(&lock_path)?;
+    save_profiles_unlocked(file)
 }
 
 /// Retrieves a specific profile by name.
@@ -335,21 +366,20 @@ pub fn get_profile(name: &str) -> Option<ToolProfile> {
     load_profiles().ok()?.profiles.remove(name)
 }
 
-/// Creates or updates a profile.
+/// Creates or updates a profile atomically.
 pub fn upsert_profile(profile: ToolProfile) -> Result<(), String> {
-    let mut file = load_profiles()?;
-    file.profiles.insert(profile.name.clone(), profile);
-    save_profiles(&file)
+    modify_profiles(|file| {
+        file.profiles.insert(profile.name.clone(), profile);
+        Ok(())
+    })
 }
 
-/// Deletes a profile by name.
+/// Deletes a profile by name atomically.
 pub fn delete_profile(name: &str) -> Result<bool, String> {
-    let mut file = load_profiles()?;
-    let removed = file.profiles.remove(name).is_some();
-    if removed {
-        save_profiles(&file)?;
-    }
-    Ok(removed)
+    modify_profiles(|file| {
+        let removed = file.profiles.remove(name).is_some();
+        Ok(removed)
+    })
 }
 
 #[cfg(test)]

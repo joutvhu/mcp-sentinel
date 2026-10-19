@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod cli;
 pub mod dialog;
+pub mod lock;
 pub mod migrate;
 pub mod platform;
 pub mod policy;

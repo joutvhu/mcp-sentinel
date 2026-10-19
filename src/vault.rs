@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 pub const SERVICE_NAME: &str = "mcp-sentinel";
 
-fn get_vault_keys_file_path() -> Option<PathBuf> {
+pub fn get_vault_keys_file_path() -> Option<PathBuf> {
     if let Ok(custom) = std::env::var("MCP_SENTINEL_CONFIG_DIR") {
         let dir = PathBuf::from(custom);
         let _ = fs::create_dir_all(&dir);
@@ -18,15 +18,26 @@ fn get_vault_keys_file_path() -> Option<PathBuf> {
     Some(config_dir.join("vault_keys.json"))
 }
 
-pub fn list_keys() -> Vec<String> {
-    if let Some(path) = get_vault_keys_file_path() {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(keys) = serde_json::from_str::<BTreeSet<String>>(&content) {
-                return keys.into_iter().collect();
-            }
+pub fn get_vault_keys_lock_path() -> Option<PathBuf> {
+    let path = get_vault_keys_file_path()?;
+    Some(path.with_file_name("vault_keys.json.lock"))
+}
+
+fn list_keys_unlocked(path: &std::path::Path) -> BTreeSet<String> {
+    if let Ok(content) = fs::read_to_string(path) {
+        if let Ok(keys) = serde_json::from_str::<BTreeSet<String>>(&content) {
+            return keys;
         }
     }
-    Vec::new()
+    BTreeSet::new()
+}
+
+pub fn list_keys() -> Vec<String> {
+    if let Some(path) = get_vault_keys_file_path() {
+        list_keys_unlocked(&path).into_iter().collect()
+    } else {
+        Vec::new()
+    }
 }
 
 /// Validates that a secret key name conforms to safe environment variable identifier rules
@@ -130,37 +141,40 @@ pub fn parse_specs(specs: &[String]) -> Result<Vec<SecretMapping>, String> {
     Ok(mappings)
 }
 
-fn save_vault_keys(path: &std::path::Path, keys: &BTreeSet<String>) {
-    if let Ok(json) = serde_json::to_string_pretty(keys) {
-        let tmp_path = path.with_extension(format!("{}.tmp", std::process::id()));
-        if fs::write(&tmp_path, json).is_ok() {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600));
-            }
-            let _ = fs::rename(&tmp_path, path);
-        }
-    }
+pub fn save_vault_keys_unlocked(path: &std::path::Path, keys: &BTreeSet<String>) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(keys)
+        .map_err(|e| format!("Failed to serialize vault keys: {}", e))?;
+    crate::lock::atomic_write_and_rename(path, json.as_bytes())
 }
 
-fn register_key(key: &str) {
+pub fn modify_vault_keys<F, R>(op: F) -> Result<R, String>
+where
+    F: FnOnce(&mut BTreeSet<String>) -> Result<R, String>,
+{
+    let path = get_vault_keys_file_path().ok_or("Failed to determine vault keys file path")?;
+    let lock_path = get_vault_keys_lock_path().ok_or("Failed to determine vault keys lock path")?;
+    let _lock = crate::lock::FileLock::acquire(&lock_path)?;
+    let mut keys = list_keys_unlocked(&path);
+    let res = op(&mut keys)?;
+    save_vault_keys_unlocked(&path, &keys)?;
+    Ok(res)
+}
+
+pub fn register_key(key: &str) {
     if key.starts_with("__") {
         return;
     }
-    if let Some(path) = get_vault_keys_file_path() {
-        let mut keys: BTreeSet<String> = list_keys().into_iter().collect();
+    let _ = modify_vault_keys(|keys| {
         keys.insert(key.to_string());
-        save_vault_keys(&path, &keys);
-    }
+        Ok(())
+    });
 }
 
-fn unregister_key(key: &str) {
-    if let Some(path) = get_vault_keys_file_path() {
-        let mut keys: BTreeSet<String> = list_keys().into_iter().collect();
+pub fn unregister_key(key: &str) {
+    let _ = modify_vault_keys(|keys| {
         keys.remove(key);
-        save_vault_keys(&path, &keys);
-    }
+        Ok(())
+    });
 }
 
 pub fn set_secret(key: &str, value: &str) -> Result<(), keyring::Error> {

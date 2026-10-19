@@ -212,10 +212,8 @@ pub async fn run_child_and_pipe(
                 msg = err_rx.recv(), if !err_rx_closed => {
                     match msg {
                         Some(err_bytes) => {
-                            if !stdout_at_newline {
-                                if host_stdout.write_all(b"\n").await.is_err() {
-                                    break;
-                                }
+                            if !stdout_at_newline && host_stdout.write_all(b"\n").await.is_err() {
+                                break;
                             }
                             if host_stdout.write_all(&err_bytes).await.is_err() {
                                 break;
@@ -322,7 +320,6 @@ pub async fn run_child_and_pipe(
                     match de.next() {
                         Some(Ok(mut val)) => {
                             let consumed = de.byte_offset();
-                            in_buf.drain(..consumed);
 
                             match val {
                                 serde_json::Value::Object(_) => {
@@ -332,11 +329,24 @@ pub async fn run_child_and_pipe(
                                         audit_enabled,
                                         &server_name_clone,
                                     ) {
+                                        in_buf.drain(..consumed);
                                         let mut err_bytes = err_resp.to_string();
                                         err_bytes.push('\n');
                                         let _ = err_tx.send(err_bytes.into_bytes()).await;
                                         continue; // Blocked: do not forward request to child
                                     }
+
+                                    // Fast-path: forward raw slice verbatim without re-serialization
+                                    if child_stdin.write_all(&in_buf[..consumed]).await.is_err() {
+                                        return;
+                                    }
+                                    if child_stdin.write_all(b"\n").await.is_err() {
+                                        return;
+                                    }
+                                    if child_stdin.flush().await.is_err() {
+                                        return;
+                                    }
+                                    in_buf.drain(..consumed);
                                 }
                                 serde_json::Value::Array(ref mut arr) => {
                                     let mut blocked_errors = Vec::new();
@@ -355,7 +365,8 @@ pub async fn run_child_and_pipe(
                                         }
                                     }
 
-                                    if !blocked_errors.is_empty() {
+                                    let has_blocked = !blocked_errors.is_empty();
+                                    if has_blocked {
                                         let mut err_bytes = serde_json::to_string(
                                             &serde_json::Value::Array(blocked_errors),
                                         )
@@ -365,22 +376,49 @@ pub async fn run_child_and_pipe(
                                     }
 
                                     if allowed_requests.is_empty() {
+                                        in_buf.drain(..consumed);
                                         continue; // Entire batch blocked
                                     }
 
-                                    val = serde_json::Value::Array(allowed_requests);
+                                    if !has_blocked {
+                                        // Fast-path: all items allowed, forward raw slice directly!
+                                        if child_stdin.write_all(&in_buf[..consumed]).await.is_err() {
+                                            return;
+                                        }
+                                        if child_stdin.write_all(b"\n").await.is_err() {
+                                            return;
+                                        }
+                                        if child_stdin.flush().await.is_err() {
+                                            return;
+                                        }
+                                        in_buf.drain(..consumed);
+                                    } else {
+                                        // Partially blocked batch: re-serialize modified payload
+                                        in_buf.drain(..consumed);
+                                        let val = serde_json::Value::Array(allowed_requests);
+                                        let mut payload = val.to_string();
+                                        payload.push('\n');
+                                        if child_stdin.write_all(payload.as_bytes()).await.is_err() {
+                                            return;
+                                        }
+                                        if child_stdin.flush().await.is_err() {
+                                            return;
+                                        }
+                                    }
                                 }
-                                _ => {}
-                            }
-
-                            // Forward allowed JSON to child stdin
-                            let mut payload = val.to_string();
-                            payload.push('\n');
-                            if child_stdin.write_all(payload.as_bytes()).await.is_err() {
-                                return;
-                            }
-                            if child_stdin.flush().await.is_err() {
-                                return;
+                                _ => {
+                                    // Fast-path: other allowed messages (primitives, notifications, etc.)
+                                    if child_stdin.write_all(&in_buf[..consumed]).await.is_err() {
+                                        return;
+                                    }
+                                    if child_stdin.write_all(b"\n").await.is_err() {
+                                        return;
+                                    }
+                                    if child_stdin.flush().await.is_err() {
+                                        return;
+                                    }
+                                    in_buf.drain(..consumed);
+                                }
                             }
                         }
                         Some(Err(ref e)) if e.is_eof() => {

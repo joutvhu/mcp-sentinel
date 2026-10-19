@@ -163,6 +163,11 @@ pub fn get_policy_file_path() -> Result<PathBuf, String> {
     Ok(config_dir.join("permissions.json"))
 }
 
+pub fn get_policy_lock_path() -> Result<PathBuf, String> {
+    let config_dir = get_config_dir()?;
+    Ok(config_dir.join("permissions.json.lock"))
+}
+
 pub fn compute_fingerprint(cmd: &[String]) -> String {
     let mut hasher = Sha256::new();
     for arg in cmd {
@@ -232,7 +237,7 @@ pub fn load_policy() -> PolicyFile {
     parsed
 }
 
-pub fn save_policy(policy: &PolicyFile) -> Result<(), String> {
+pub fn save_policy_unlocked(policy: &PolicyFile) -> Result<(), String> {
     let path = get_policy_file_path()?;
 
     let mut signed_policy = policy.clone();
@@ -242,20 +247,25 @@ pub fn save_policy(policy: &PolicyFile) -> Result<(), String> {
     let json = serde_json::to_string_pretty(&signed_policy)
         .map_err(|e| format!("Failed to serialize policy: {}", e))?;
 
-    let tmp_path = path.with_extension(format!("{}.tmp", std::process::id()));
-    fs::write(&tmp_path, json).map_err(|e| format!("Failed to write policy file: {}", e))?;
+    crate::lock::atomic_write_and_rename(&path, json.as_bytes())
+}
 
-    // Layer 1: Restrict file permissions to 0600 on Unix (owner read/write only)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600));
-    }
+pub fn modify_policy<F, R>(op: F) -> Result<R, String>
+where
+    F: FnOnce(&mut PolicyFile) -> Result<R, String>,
+{
+    let lock_path = get_policy_lock_path()?;
+    let _lock = crate::lock::FileLock::acquire(&lock_path)?;
+    let mut policy = load_policy();
+    let result = op(&mut policy)?;
+    save_policy_unlocked(&policy)?;
+    Ok(result)
+}
 
-    fs::rename(&tmp_path, &path)
-        .map_err(|e| format!("Failed to atomically update policy file: {}", e))?;
-
-    Ok(())
+pub fn save_policy(policy: &PolicyFile) -> Result<(), String> {
+    let lock_path = get_policy_lock_path()?;
+    let _lock = crate::lock::FileLock::acquire(&lock_path)?;
+    save_policy_unlocked(policy)
 }
 
 /// Checks whether all requested secrets have already been authorized for this command fingerprint.
@@ -280,44 +290,46 @@ pub fn record_grant(
     cmd: &[String],
     approved_secrets: &[String],
 ) -> Result<(), String> {
-    let mut policy = load_policy();
-    let command_str = cmd.join(" ");
+    modify_policy(|policy| {
+        let command_str = cmd.join(" ");
 
-    let entry = policy
-        .grants
-        .entry(fingerprint.to_string())
-        .or_insert_with(|| Grant {
-            id: fingerprint.to_string(),
-            name,
-            command: command_str,
-            granted_secrets: Vec::new(),
-            created_at: Utc::now(),
-        });
+        let entry = policy
+            .grants
+            .entry(fingerprint.to_string())
+            .or_insert_with(|| Grant {
+                id: fingerprint.to_string(),
+                name,
+                command: command_str,
+                granted_secrets: Vec::new(),
+                created_at: Utc::now(),
+            });
 
-    let mut set: HashSet<String> = entry.granted_secrets.drain(..).collect();
-    for s in approved_secrets {
-        set.insert(s.clone());
-    }
-    entry.granted_secrets = set.into_iter().collect();
-    entry.granted_secrets.sort();
+        let mut set: HashSet<String> = entry.granted_secrets.drain(..).collect();
+        for s in approved_secrets {
+            set.insert(s.clone());
+        }
+        entry.granted_secrets = set.into_iter().collect();
+        entry.granted_secrets.sort();
 
-    save_policy(&policy)
+        Ok(())
+    })
 }
 
 /// Revoke a grant by its ID (fingerprint).
 pub fn revoke_grant(id: &str) -> Result<bool, String> {
-    let mut policy = load_policy();
-    let removed = policy.grants.remove(id).is_some();
-    if removed {
-        save_policy(&policy)?;
-    }
-    Ok(removed)
+    modify_policy(|policy| {
+        let removed = policy.grants.remove(id).is_some();
+        Ok(removed)
+    })
 }
 
 /// Reset all granted permissions.
 pub fn reset_grants() -> Result<(), String> {
-    let policy = PolicyFile::default();
-    save_policy(&policy)
+    modify_policy(|policy| {
+        policy.grants.clear();
+        policy.signature = None;
+        Ok(())
+    })
 }
 
 #[cfg(test)]
