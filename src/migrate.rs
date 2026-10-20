@@ -338,6 +338,141 @@ pub fn clean_jsonc(input: &str) -> String {
     strip_trailing_commas(&stripped)
 }
 
+/// Returns true if the string is formatted as an environment variable placeholder
+/// such as `${env:VAR}`, `${VAR}`, or `$VAR`.
+pub fn is_placeholder_value(val: &str) -> bool {
+    let trimmed = val.trim();
+    (trimmed.starts_with("${env:") && trimmed.ends_with('}') && trimmed.len() > 7)
+        || (trimmed.starts_with("${") && trimmed.ends_with('}') && trimmed.len() > 3)
+        || (trimmed.starts_with('$') && !trimmed.contains(' ') && trimmed.len() > 1)
+}
+
+/// Returns true if a key name indicates a non-secret configuration setting
+/// (such as URLs, file paths, directories, ports, hosts, regions, levels, etc.)
+/// that must not be extracted to Vault Keyring or added to DLP redaction.
+pub fn is_non_secret_config_key(key: &str) -> bool {
+    let upper = key.to_uppercase();
+
+    // Explicit config suffixes that override sensitive keywords if present at the end
+    // (e.g. AUTH_URL, KEY_FILE, CERT_PATH, SECRET_DIR are paths/endpoints, not secrets)
+    const CONFIG_SUFFIXES: &[&str] = &[
+        "_URL",
+        "_URI",
+        "_ENDPOINT",
+        "_PATH",
+        "_DIR",
+        "_DIRECTORY",
+        "_FOLDER",
+        "_FILE",
+        "_FILENAME",
+        "_HOST",
+        "_HOSTNAME",
+        "_PORT",
+        "_REGION",
+        "_ZONE",
+        "_NAME",
+        "_LEVEL",
+        "_MODE",
+        "_ENV",
+        "_ENVIRONMENT",
+        "_STAGE",
+        "_TIMEOUT",
+        "_INTERVAL",
+        "_TTL",
+        "_RETRY",
+        "_RETRIES",
+        "_LIMIT",
+        "_ENABLED",
+        "_DISABLED",
+        "_FLAG",
+        "_DEBUG",
+        "_VERBOSE",
+        "_VERSION",
+        "_COUNT",
+        "_SIZE",
+    ];
+
+    const CONFIG_EXACT: &[&str] = &[
+        "URL", "URI", "ENDPOINT", "PATH", "DIR", "DIRECTORY", "FOLDER", "FILE",
+        "HOST", "HOSTNAME", "PORT", "REGION", "ZONE", "NAME", "LEVEL", "MODE",
+        "ENV", "ENVIRONMENT", "STAGE", "DEBUG", "VERBOSE", "TIMEOUT", "VERSION",
+        "NO_PROXY", "HTTP_PROXY", "HTTPS_PROXY",
+    ];
+
+    if CONFIG_EXACT.contains(&upper.as_str()) {
+        return true;
+    }
+
+    if upper.contains("BYPASS") {
+        return true;
+    }
+
+    for suffix in CONFIG_SUFFIXES {
+        if upper.ends_with(suffix) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Returns true if the key name indicates it likely holds a secret (credential, token, password, etc.)
+pub fn is_likely_secret_key(key: &str) -> bool {
+    if is_non_secret_config_key(key) {
+        return false;
+    }
+
+    let upper = key.to_uppercase();
+
+    // Sensitive keyword checks
+    if upper.contains("KEY")
+        || upper.contains("TOKEN")
+        || upper.contains("SECRET")
+        || upper.contains("PASSWORD")
+        || upper.contains("PASSWD")
+        || upper.contains("PASSPHRASE")
+        || upper.contains("AUTH")
+        || upper.contains("CREDENTIAL")
+        || upper.contains("PRIVATE")
+        || upper.contains("CERT")
+        || upper.contains("SIGNING")
+        || upper.contains("APIKEY")
+        || upper.contains("BEARER")
+        || upper.contains("SESSION")
+        || upper.contains("SIGNATURE")
+        || upper.contains("SALT")
+        || upper.contains("ENCRYPTION")
+    {
+        return true;
+    }
+
+    // Special handling for PASS: ends with _PASS, starts with PASS_, or equals PASS
+    if upper == "PASS" || upper.starts_with("PASS_") || upper.ends_with("_PASS") {
+        return true;
+    }
+
+    false
+}
+
+/// Returns true if a key-value pair represents a secret that should be migrated to Vault Keyring
+/// and passed via --secrets to mcp-sentinel.
+pub fn is_likely_secret(key: &str, raw_val: &str) -> bool {
+    // Non-secret configs (URLs, paths, dirs, ports, levels, etc.) must NEVER be treated as secrets
+    if is_non_secret_config_key(key) {
+        return false;
+    }
+
+    if is_likely_secret_key(key) {
+        return true;
+    }
+
+    if is_placeholder_value(raw_val) {
+        return true;
+    }
+
+    false
+}
+
 /// Transforms raw JSON content: extracts plaintext secrets into OS vault, wraps commands with mcp-sentinel,
 /// and strips plaintext env vars from the JSON.
 pub fn transform_config_json(
@@ -396,47 +531,52 @@ pub fn transform_config_json(
 
         let mut secret_specs = Vec::new();
         let mut extracted_keys = Vec::new();
+        let mut retained_env = serde_json::Map::new();
 
-        // Extract secrets from plaintext "env" block
+        // Extract secrets from plaintext "env" block, retaining non-secret configs
         if let Some(env_val) = server_obj.get("env").and_then(|e| e.as_object()) {
             for (env_key, val) in env_val {
                 let raw_val_str = match val.as_str() {
                     Some(s) => s.to_string(),
                     None => val.to_string(),
                 };
-                let val_str = resolve_env_placeholder(&raw_val_str);
 
-                let clean_key = sanitize_for_env_key(env_key);
+                if is_likely_secret(env_key, &raw_val_str) {
+                    let val_str = resolve_env_placeholder(&raw_val_str);
+                    let clean_key = sanitize_for_env_key(env_key);
 
-                // Determine vault storage key
-                let mut vault_key = clean_key.clone();
-                if let Ok(existing) = crate::vault::get_secret(&vault_key) {
-                    if existing != val_str {
-                        // Key exists with a different value -> create a dedicated alias to avoid collision
-                        let server_prefix = sanitize_for_env_key(server_name);
-                        vault_key = format!("{}_{}", server_prefix, clean_key);
+                    // Determine vault storage key
+                    let mut vault_key = clean_key.clone();
+                    if let Ok(existing) = crate::vault::get_secret(&vault_key) {
+                        if existing != val_str {
+                            // Key exists with a different value -> create a dedicated alias to avoid collision
+                            let server_prefix = sanitize_for_env_key(server_name);
+                            vault_key = format!("{}_{}", server_prefix, clean_key);
+                        }
                     }
-                }
 
-                // Avoid collision with reserved sentinel prefixes
-                if vault_key.to_uppercase().starts_with("MCP_SENTINEL")
-                    || vault_key.starts_with("__")
-                {
-                    vault_key = format!("SRV_{}", vault_key);
-                }
+                    // Avoid collision with reserved sentinel prefixes
+                    if vault_key.to_uppercase().starts_with("MCP_SENTINEL")
+                        || vault_key.starts_with("__")
+                    {
+                        vault_key = format!("SRV_{}", vault_key);
+                    }
 
-                if !dry_run {
-                    crate::vault::set_secret(&vault_key, &val_str).map_err(|e| {
-                        format!("Failed to store secret '{}' in Keyring: {}", vault_key, e)
-                    })?;
-                }
+                    if !dry_run {
+                        crate::vault::set_secret(&vault_key, &val_str).map_err(|e| {
+                            format!("Failed to store secret '{}' in Keyring: {}", vault_key, e)
+                        })?;
+                    }
 
-                extracted_keys.push(vault_key.clone());
+                    extracted_keys.push(vault_key.clone());
 
-                if clean_key == vault_key {
-                    secret_specs.push(clean_key);
+                    if clean_key == vault_key {
+                        secret_specs.push(clean_key);
+                    } else {
+                        secret_specs.push(format!("{}={}", clean_key, vault_key));
+                    }
                 } else {
-                    secret_specs.push(format!("{}={}", clean_key, vault_key));
+                    retained_env.insert(env_key.clone(), val.clone());
                 }
             }
         }
@@ -471,7 +611,12 @@ pub fn transform_config_json(
             .unwrap_or_else(|| "mcp-sentinel".to_string());
         server_obj.insert("command".to_string(), json!(sentinel_bin));
         server_obj.insert("args".to_string(), json!(new_args));
-        server_obj.remove("env"); // Remove plaintext secrets from disk!
+
+        if retained_env.is_empty() {
+            server_obj.remove("env"); // Remove plaintext secrets from disk
+        } else {
+            server_obj.insert("env".to_string(), Value::Object(retained_env)); // Retain non-secret configs
+        }
 
         let status = if secret_specs.is_empty() {
             "Isolated with mcp-sentinel (no secrets required)".to_string()
@@ -789,7 +934,8 @@ mod tests {
                         "@modelcontextprotocol/server-postgres",
                     ], // trailing comma in args
                     "env": {
-                        "DATABASE_URL": "postgresql://user:pass@localhost:5432/db", // line comment
+                        "DATABASE_URL": "postgresql://localhost:5432/db", // line comment
+                        "POSTGRES_PASSWORD": "secret_password_123",
                     }, // trailing comma in env
                 },
             }, // trailing comma in mcpServers
@@ -798,12 +944,171 @@ mod tests {
         let (output_json, results) = transform_config_json(jsonc, true).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].server_name, "postgres");
-        assert_eq!(results[0].extracted_secrets, vec!["DATABASE_URL"]);
+        assert_eq!(results[0].extracted_secrets, vec!["POSTGRES_PASSWORD"]);
         assert!(!results[0].already_migrated);
 
         let parsed: Value = serde_json::from_str(&output_json).unwrap();
         let pg = &parsed["mcpServers"]["postgres"];
         assert_eq!(pg["command"], "mcp-sentinel");
-        assert!(pg.get("env").is_none());
+        assert!(pg.get("env").is_some());
+        assert_eq!(pg["env"]["DATABASE_URL"], "postgresql://localhost:5432/db");
+        assert!(pg["env"].get("POSTGRES_PASSWORD").is_none());
+
+        let args = pg["args"].as_array().unwrap();
+        assert!(args.contains(&Value::String("--secrets".to_string())));
+        assert!(args.contains(&Value::String("POSTGRES_PASSWORD".to_string())));
+    }
+
+    #[test]
+    fn test_is_likely_secret_heuristics() {
+        // Secrets
+        assert!(is_likely_secret_key("GITHUB_TOKEN"));
+        assert!(is_likely_secret_key("OPENAI_API_KEY"));
+        assert!(is_likely_secret_key("DB_PASSWORD"));
+        assert!(is_likely_secret_key("REDIS_PASS"));
+        assert!(is_likely_secret_key("CLIENT_SECRET"));
+        assert!(is_likely_secret_key("AUTH_HEADER"));
+        assert!(is_likely_secret_key("AWS_SECRET_ACCESS_KEY"));
+        assert!(is_likely_secret_key("PRIVATE_KEY"));
+        assert!(is_likely_secret_key("SSL_CERT"));
+        assert!(is_likely_secret_key("SESSION_TOKEN"));
+        assert!(is_likely_secret_key("ENCRYPTION_SALT"));
+        assert!(is_likely_secret_key("APIKEY"));
+
+        // Configs (must NOT be treated as secret keys)
+        assert!(!is_likely_secret_key("GITHUB_API_URL"));
+        assert!(!is_likely_secret_key("WORKSPACE_PATH"));
+        assert!(!is_likely_secret_key("WORKSPACE_DIR"));
+        assert!(!is_likely_secret_key("AWS_REGION"));
+        assert!(!is_likely_secret_key("LOG_LEVEL"));
+        assert!(!is_likely_secret_key("DB_NAME"));
+        assert!(!is_likely_secret_key("PORT"));
+        assert!(!is_likely_secret_key("HOST"));
+        assert!(!is_likely_secret_key("NODE_ENV"));
+        assert!(!is_likely_secret_key("REQUEST_TIMEOUT"));
+        assert!(!is_likely_secret_key("BYPASS_PROXY"));
+        assert!(!is_likely_secret_key("AUTH_URL"));
+        assert!(!is_likely_secret_key("KEY_FILE"));
+        assert!(!is_likely_secret_key("CERT_PATH"));
+
+        // Placeholders
+        assert!(is_placeholder_value("${env:SECRET_KEY}"));
+        assert!(is_placeholder_value("${SECRET_KEY}"));
+        assert!(is_placeholder_value("$SECRET_KEY"));
+        assert!(!is_placeholder_value("https://api.github.com"));
+        assert!(!is_placeholder_value("/path/to/folder"));
+        assert!(!is_placeholder_value("debug"));
+
+        // Combined is_likely_secret
+        assert!(is_likely_secret("GITHUB_TOKEN", "ghp_123456"));
+        assert!(is_likely_secret("OPENAI_API_KEY", "sk-123456"));
+        assert!(is_likely_secret("DB_PASSWORD", "secret_pass"));
+        assert!(is_likely_secret("CUSTOM_PARAM", "${env:MY_SECRET}"));
+
+        assert!(!is_likely_secret("GITHUB_API_URL", "https://api.github.com"));
+        assert!(!is_likely_secret("WORKSPACE_PATH", "/home/user/project"));
+        assert!(!is_likely_secret("LOG_LEVEL", "debug"));
+        assert!(!is_likely_secret("GITHUB_API_URL", "${env:GITHUB_API_URL}"));
+        assert!(!is_likely_secret("WORKSPACE_DIR", "${env:WORKSPACE_DIR}"));
+    }
+
+    #[test]
+    fn test_transform_config_json_mixed_env() {
+        let input_json = r#"{
+            "mcpServers": {
+                "mixed_server": {
+                    "command": "node",
+                    "args": ["server.js"],
+                    "env": {
+                        "GITHUB_TOKEN": "ghp_mock_123456",
+                        "OPENAI_API_KEY": "sk-mock-987654",
+                        "DB_PASSWORD": "db_secret_pass",
+                        "GITHUB_API_URL": "https://api.github.com",
+                        "WORKSPACE_PATH": "/path/to/workspace",
+                        "LOG_LEVEL": "debug"
+                    }
+                }
+            }
+        }"#;
+
+        let (output_json, results) = transform_config_json(input_json, true).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].server_name, "mixed_server");
+
+        // Exactly 3 secrets should be extracted
+        assert_eq!(results[0].extracted_secrets.len(), 3);
+        assert!(results[0].extracted_secrets.contains(&"GITHUB_TOKEN".to_string()));
+        assert!(results[0].extracted_secrets.contains(&"OPENAI_API_KEY".to_string()));
+        assert!(results[0].extracted_secrets.contains(&"DB_PASSWORD".to_string()));
+        assert!(!results[0].extracted_secrets.contains(&"GITHUB_API_URL".to_string()));
+        assert!(!results[0].extracted_secrets.contains(&"WORKSPACE_PATH".to_string()));
+        assert!(!results[0].extracted_secrets.contains(&"LOG_LEVEL".to_string()));
+
+        let parsed: Value = serde_json::from_str(&output_json).unwrap();
+        let server = &parsed["mcpServers"]["mixed_server"];
+
+        assert_eq!(server["command"], "mcp-sentinel");
+
+        // The 3 configs MUST be retained in "env"
+        let env_obj = server["env"].as_object().unwrap();
+        assert_eq!(env_obj.len(), 3);
+        assert_eq!(env_obj["GITHUB_API_URL"], "https://api.github.com");
+        assert_eq!(env_obj["WORKSPACE_PATH"], "/path/to/workspace");
+        assert_eq!(env_obj["LOG_LEVEL"], "debug");
+
+        // The 3 secrets MUST be removed from "env"
+        assert!(!env_obj.contains_key("GITHUB_TOKEN"));
+        assert!(!env_obj.contains_key("OPENAI_API_KEY"));
+        assert!(!env_obj.contains_key("DB_PASSWORD"));
+
+        // --secrets flag should contain the 3 secrets
+        let args = server["args"].as_array().unwrap();
+        let secrets_idx = args.iter().position(|a| a == "--secrets").unwrap();
+        let secrets_val = args[secrets_idx + 1].as_str().unwrap();
+        assert!(secrets_val.contains("GITHUB_TOKEN"));
+        assert!(secrets_val.contains("OPENAI_API_KEY"));
+        assert!(secrets_val.contains("DB_PASSWORD"));
+        assert!(!secrets_val.contains("GITHUB_API_URL"));
+    }
+
+    #[test]
+    fn test_transform_config_json_config_only_env() {
+        let input_json = r#"{
+            "mcpServers": {
+                "config_only_server": {
+                    "command": "python",
+                    "args": ["-m", "server"],
+                    "env": {
+                        "GITHUB_API_URL": "https://api.github.com",
+                        "WORKSPACE_DIR": "/path/to/dir",
+                        "AWS_REGION": "us-west-2",
+                        "LOG_LEVEL": "info"
+                    }
+                }
+            }
+        }"#;
+
+        let (output_json, results) = transform_config_json(input_json, true).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].server_name, "config_only_server");
+        assert_eq!(results[0].extracted_secrets.len(), 0);
+        assert_eq!(results[0].status, "Isolated with mcp-sentinel (no secrets required)");
+
+        let parsed: Value = serde_json::from_str(&output_json).unwrap();
+        let server = &parsed["mcpServers"]["config_only_server"];
+
+        assert_eq!(server["command"], "mcp-sentinel");
+
+        // All configs preserved in "env"
+        let env_obj = server["env"].as_object().unwrap();
+        assert_eq!(env_obj.len(), 4);
+        assert_eq!(env_obj["GITHUB_API_URL"], "https://api.github.com");
+        assert_eq!(env_obj["WORKSPACE_DIR"], "/path/to/dir");
+        assert_eq!(env_obj["AWS_REGION"], "us-west-2");
+        assert_eq!(env_obj["LOG_LEVEL"], "info");
+
+        // --secrets flag should NOT be present in args
+        let args = server["args"].as_array().unwrap();
+        assert!(!args.iter().any(|a| a == "--secrets"));
     }
 }
