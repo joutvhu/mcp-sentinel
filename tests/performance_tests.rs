@@ -55,7 +55,7 @@ fn bench_sanitizer_environment_building_10000_ops() {
     let iterations = 10_000;
 
     for _ in 0..iterations {
-        let clean_env = build_sanitized_env(&secrets);
+        let clean_env = build_sanitized_env(&secrets, &[]);
         assert_eq!(
             clean_env.get("GITHUB_TOKEN"),
             Some(&"ghp_123456789".to_string())

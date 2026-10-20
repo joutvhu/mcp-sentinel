@@ -61,6 +61,7 @@ async fn main() {
     match cli.command {
         Commands::Run {
             secrets,
+            pass_env,
             name,
             no_redact,
             allow_once,
@@ -208,7 +209,7 @@ async fn main() {
             }
 
             // 3. Prepare clean environment
-            let clean_env = sanitizer::build_sanitized_env(&secrets_map);
+            let clean_env = sanitizer::build_sanitized_env(&secrets_map, &pass_env);
 
             // 4. Determine secrets to redact on stdout (DLP filter)
             let redact_secrets: Vec<String> = if no_redact {

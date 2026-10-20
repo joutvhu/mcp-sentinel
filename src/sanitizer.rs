@@ -105,9 +105,13 @@ pub fn sanitize_path(path_val: &str, exe_dir: &std::path::Path) -> std::ffi::OsS
     env::join_paths(filtered_paths).unwrap_or_default()
 }
 
-/// Builds a sanitized environment map containing only safe system variables
-/// and explicitly injected secrets. Injects a child security context lock to prevent recursion.
-pub fn build_sanitized_env(secrets_to_inject: &HashMap<String, String>) -> HashMap<String, String> {
+/// Builds a sanitized environment map containing only safe system variables,
+/// explicitly passed environment variables from the host, and injected secrets.
+/// Injects a child security context lock to prevent recursion.
+pub fn build_sanitized_env(
+    secrets_to_inject: &HashMap<String, String>,
+    pass_env_keys: &[String],
+) -> HashMap<String, String> {
     let mut clean_env = HashMap::new();
 
     for &key in SAFE_KEYS {
@@ -132,9 +136,29 @@ pub fn build_sanitized_env(secrets_to_inject: &HashMap<String, String>) -> HashM
         }
     }
 
-    // Inject approved secrets (excluding reserved sentinel prefixes)
+    // Pass through explicit host environment variables (excluding dangerous runtime vars and reserved prefixes)
+    for raw_key in pass_env_keys {
+        let key = raw_key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        if key.starts_with("__") || key.to_uppercase().starts_with("MCP_SENTINEL") {
+            continue;
+        }
+        if crate::vault::is_dangerous_runtime_var(key) {
+            continue;
+        }
+        if let Ok(val) = env::var(key) {
+            clean_env.insert(key.to_string(), val);
+        }
+    }
+
+    // Inject approved secrets (excluding reserved sentinel prefixes and dangerous runtime vars)
     for (k, v) in secrets_to_inject {
-        if !k.to_uppercase().starts_with("MCP_SENTINEL") && !k.starts_with("__") {
+        if !k.to_uppercase().starts_with("MCP_SENTINEL")
+            && !k.starts_with("__")
+            && !crate::vault::is_dangerous_runtime_var(k)
+        {
             clean_env.insert(k.clone(), v.clone());
         }
     }
@@ -154,7 +178,7 @@ mod tests {
         let mut secrets = HashMap::new();
         secrets.insert("TEST_SECRET_KEY".to_string(), "secret_val".to_string());
 
-        let env_map = build_sanitized_env(&secrets);
+        let env_map = build_sanitized_env(&secrets, &[]);
         assert_eq!(
             env_map.get("TEST_SECRET_KEY"),
             Some(&"secret_val".to_string())
@@ -167,7 +191,7 @@ mod tests {
     #[test]
     fn test_sanitized_env_preserves_path() {
         let secrets = HashMap::new();
-        let env_map = build_sanitized_env(&secrets);
+        let env_map = build_sanitized_env(&secrets, &[]);
 
         // PATH (or Path on Windows) must be preserved for runtime binary execution
         let has_path = env_map.keys().any(|k| k.eq_ignore_ascii_case("PATH"));
@@ -180,7 +204,7 @@ mod tests {
         secrets.insert("SECRET_1".to_string(), "val_1".to_string());
         secrets.insert("SECRET_2".to_string(), "val_2".to_string());
 
-        let env_map = build_sanitized_env(&secrets);
+        let env_map = build_sanitized_env(&secrets, &[]);
         assert_eq!(env_map.get("SECRET_1"), Some(&"val_1".to_string()));
         assert_eq!(env_map.get("SECRET_2"), Some(&"val_2".to_string()));
     }
@@ -188,7 +212,7 @@ mod tests {
     #[test]
     fn test_sanitized_env_child_security_context() {
         let secrets = HashMap::new();
-        let env_map = build_sanitized_env(&secrets);
+        let env_map = build_sanitized_env(&secrets, &[]);
         assert_eq!(
             env_map.get("MCP_SENTINEL_CHILD_CONTEXT"),
             Some(&"1".to_string()),
@@ -203,7 +227,7 @@ mod tests {
         malicious_secrets.insert("mcp_sentinel_custom".to_string(), "evil".to_string());
         malicious_secrets.insert("__INTERNAL_KEY".to_string(), "bad".to_string());
 
-        let env_map = build_sanitized_env(&malicious_secrets);
+        let env_map = build_sanitized_env(&malicious_secrets, &[]);
         assert_eq!(
             env_map.get("MCP_SENTINEL_CHILD_CONTEXT"),
             Some(&"1".to_string()),
@@ -211,6 +235,79 @@ mod tests {
         );
         assert!(!env_map.contains_key("mcp_sentinel_custom"));
         assert!(!env_map.contains_key("__INTERNAL_KEY"));
+    }
+
+    #[test]
+    fn test_sanitized_env_pass_env_forwarding() {
+        std::env::set_var("TEST_SAFE_CFG_PORT", "8080");
+        std::env::set_var("TEST_SAFE_CFG_DB", "postgres://localhost/db");
+
+        let secrets = HashMap::new();
+        let pass_keys = vec![
+            "TEST_SAFE_CFG_PORT".to_string(),
+            "TEST_SAFE_CFG_DB".to_string(),
+            "NON_EXISTENT_VAR".to_string(),
+        ];
+
+        let env_map = build_sanitized_env(&secrets, &pass_keys);
+        assert_eq!(env_map.get("TEST_SAFE_CFG_PORT"), Some(&"8080".to_string()));
+        assert_eq!(
+            env_map.get("TEST_SAFE_CFG_DB"),
+            Some(&"postgres://localhost/db".to_string())
+        );
+        assert!(!env_map.contains_key("NON_EXISTENT_VAR"));
+
+        std::env::remove_var("TEST_SAFE_CFG_PORT");
+        std::env::remove_var("TEST_SAFE_CFG_DB");
+    }
+
+    #[test]
+    fn test_sanitized_env_pass_env_blocks_dangerous_and_reserved() {
+        std::env::set_var("NODE_OPTIONS", "--require evil.js");
+        std::env::set_var("PYTHONPATH", "/tmp/evil");
+        std::env::set_var("LD_PRELOAD", "/tmp/evil.so");
+        std::env::set_var("__SENTINEL_INTERNAL", "bad");
+        std::env::set_var("MCP_SENTINEL_CUSTOM", "bad");
+
+        let secrets = HashMap::new();
+        let pass_keys = vec![
+            "NODE_OPTIONS".to_string(),
+            "pythonpath".to_string(),
+            "LD_PRELOAD".to_string(),
+            "__SENTINEL_INTERNAL".to_string(),
+            "MCP_SENTINEL_CUSTOM".to_string(),
+        ];
+
+        let env_map = build_sanitized_env(&secrets, &pass_keys);
+        assert!(!env_map.contains_key("NODE_OPTIONS"));
+        assert!(!env_map.contains_key("pythonpath"));
+        assert!(!env_map.contains_key("PYTHONPATH"));
+        assert!(!env_map.contains_key("LD_PRELOAD"));
+        assert!(!env_map.contains_key("__SENTINEL_INTERNAL"));
+        assert!(!env_map.contains_key("MCP_SENTINEL_CUSTOM"));
+
+        std::env::remove_var("NODE_OPTIONS");
+        std::env::remove_var("PYTHONPATH");
+        std::env::remove_var("LD_PRELOAD");
+        std::env::remove_var("__SENTINEL_INTERNAL");
+        std::env::remove_var("MCP_SENTINEL_CUSTOM");
+    }
+
+    #[test]
+    fn test_sanitized_env_secrets_override_pass_env() {
+        std::env::set_var("SHARED_KEY", "host_value");
+
+        let mut secrets = HashMap::new();
+        secrets.insert("SHARED_KEY".to_string(), "vault_secret_value".to_string());
+
+        let pass_keys = vec!["SHARED_KEY".to_string()];
+        let env_map = build_sanitized_env(&secrets, &pass_keys);
+        assert_eq!(
+            env_map.get("SHARED_KEY"),
+            Some(&"vault_secret_value".to_string())
+        );
+
+        std::env::remove_var("SHARED_KEY");
     }
 
     #[test]

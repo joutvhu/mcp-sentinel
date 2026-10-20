@@ -48,6 +48,27 @@ fn test_cli_version_flag() {
 }
 
 #[test]
+fn test_cli_run_pass_env() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("SENTINEL_INTEG_TEST_PORT", "4000")
+        .args([
+            "run",
+            "--pass-env",
+            "SENTINEL_INTEG_TEST_PORT",
+            "--",
+            "node",
+            "-e",
+            "console.log('PORT:' + process.env.SENTINEL_INTEG_TEST_PORT);",
+        ])
+        .output()
+        .expect("Failed to execute mcp-sentinel run with --pass-env");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("PORT:4000"));
+}
+
+#[test]
 fn test_cli_run_without_command_fails() {
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
         .arg("run")

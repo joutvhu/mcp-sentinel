@@ -81,7 +81,7 @@ fn test_sanitizer_with_100_secrets() {
         secrets.insert(format!("SECRET_VAR_{:03}", i), format!("val_{}", i));
     }
 
-    let clean_env = build_sanitized_env(&secrets);
+    let clean_env = build_sanitized_env(&secrets, &[]);
 
     // Verify all 100 secrets are present
     for i in 0..100 {

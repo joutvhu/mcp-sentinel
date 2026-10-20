@@ -21,6 +21,10 @@ pub enum Commands {
         #[arg(short, long, value_delimiter = ',')]
         secrets: Vec<String>,
 
+        /// Comma-separated list of non-secret host environment variables to pass through
+        #[arg(long, alias = "env", value_delimiter = ',')]
+        pass_env: Vec<String>,
+
         /// Optional descriptive name for the MCP server
         #[arg(short, long)]
         name: Option<String>,
@@ -233,6 +237,7 @@ mod tests {
         match cli.command {
             Commands::Run {
                 secrets,
+                pass_env,
                 name,
                 cmd,
                 no_redact,
@@ -243,6 +248,7 @@ mod tests {
                 audit,
             } => {
                 assert_eq!(secrets, vec!["KEY_A".to_string(), "KEY_B".to_string()]);
+                assert!(pass_env.is_empty());
                 assert_eq!(name, Some("My Server".to_string()));
                 assert_eq!(cmd, vec!["node".to_string(), "server.js".to_string()]);
                 assert!(!no_redact);
@@ -251,6 +257,47 @@ mod tests {
                 assert!(deny_tools.is_empty());
                 assert!(allow_tools.is_empty());
                 assert!(!audit);
+            }
+            _ => panic!("Expected Commands::Run"),
+        }
+    }
+
+    #[test]
+    fn test_parse_run_command_with_pass_env() {
+        let args = vec![
+            "mcp-sentinel",
+            "run",
+            "--pass-env",
+            "PORT,DB_NAME,DEBUG",
+            "--",
+            "node",
+            "server.js",
+        ];
+        let cli = Cli::try_parse_from(args).expect("CLI should parse pass-env successfully");
+        match cli.command {
+            Commands::Run { pass_env, .. } => {
+                assert_eq!(
+                    pass_env,
+                    vec!["PORT".to_string(), "DB_NAME".to_string(), "DEBUG".to_string()]
+                );
+            }
+            _ => panic!("Expected Commands::Run"),
+        }
+
+        // Test alias --env
+        let args_alias = vec![
+            "mcp-sentinel",
+            "run",
+            "--env",
+            "HOST,PORT",
+            "--",
+            "node",
+            "server.js",
+        ];
+        let cli_alias = Cli::try_parse_from(args_alias).expect("CLI should parse --env alias successfully");
+        match cli_alias.command {
+            Commands::Run { pass_env, .. } => {
+                assert_eq!(pass_env, vec!["HOST".to_string(), "PORT".to_string()]);
             }
             _ => panic!("Expected Commands::Run"),
         }

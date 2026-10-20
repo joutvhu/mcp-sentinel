@@ -215,7 +215,7 @@ pub async fn run_child_and_pipe(
     let (mut duplex_write, mut duplex_read) = tokio::io::duplex(65536);
     let (err_tx, mut err_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
 
-    let stdout_writer_task = tokio::spawn(async move {
+    let mut stdout_writer_task = tokio::spawn(async move {
         let mut child_buf = Vec::new();
         let mut raw_buf = [0u8; 8192];
         let mut stdout_at_newline = true;
@@ -467,7 +467,7 @@ pub async fn run_child_and_pipe(
         }
     });
 
-    let out_task = tokio::spawn(async move {
+    let mut out_task = tokio::spawn(async move {
         if redact_secrets.is_empty() {
             let _ = tokio::io::copy(&mut child_stdout, &mut duplex_write).await;
         } else {
@@ -478,7 +478,7 @@ pub async fn run_child_and_pipe(
         }
     });
 
-    let err_task = tokio::spawn(async move {
+    let mut err_task = tokio::spawn(async move {
         let _ = tokio::io::copy(&mut child_stderr, &mut host_stderr).await;
     });
 
@@ -549,10 +549,28 @@ pub async fn run_child_and_pipe(
     // Abort in_task to avoid lingering task reading host_stdin if child exited first
     in_task.abort();
 
-    // Join remaining forwarding tasks
-    let _ = out_task.await;
-    let _ = stdout_writer_task.await;
-    let _ = err_task.await;
+    // BUG-01 Fix: Actively drop lifecycle guards to terminate orphan grandchild processes
+    // before awaiting pipe tasks, unblocking stdout/stderr EOF.
+    #[cfg(windows)]
+    drop(_job_guard);
+    #[cfg(unix)]
+    drop(_unix_guard);
+
+    // Join remaining forwarding tasks with a bounded timeout to prevent hanging on open pipe handles
+    let join_forwarding = async {
+        let _ = (&mut out_task).await;
+        let _ = (&mut stdout_writer_task).await;
+        let _ = (&mut err_task).await;
+    };
+
+    if tokio::time::timeout(std::time::Duration::from_millis(250), join_forwarding)
+        .await
+        .is_err()
+    {
+        out_task.abort();
+        stdout_writer_task.abort();
+        err_task.abort();
+    }
 
     #[cfg(unix)]
     let code = {

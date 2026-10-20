@@ -1662,3 +1662,172 @@ fn hack_test_job_object_blocks_secret_access_even_without_child_context_env() {
     assert!(stderr_sandboxed.contains("Security Violation"));
 }
 
+/// HACK ATTACK 30: BUG-01 Fix Verification - Grandchild Pipe Hang Mitigation
+/// When a child process spawns an orphan grandchild holding open stdout/stderr pipes,
+/// mcp-sentinel must drop its process lifecycle guards and enforce a bounded timeout (250ms),
+/// terminating cleanly (< 3s) rather than hanging indefinitely waiting for pipe EOF.
+#[test]
+fn hack_test_grandchild_pipe_hang_mitigation() {
+    let script = r#"
+        const cp = require('child_process');
+        if (process.platform === 'win32') {
+            const sub = cp.spawn('powershell.exe', ['-NoProfile', '-Command', 'Start-Sleep -Seconds 10'], {
+                stdio: 'inherit',
+                detached: true
+            });
+            sub.unref();
+        } else {
+            const sub = cp.spawn('sleep', ['10'], {
+                stdio: 'inherit',
+                detached: true
+            });
+            sub.unref();
+        }
+        console.log('PARENT_CHILD_EXITED');
+        process.exit(0);
+    "#;
+
+    let start = std::time::Instant::now();
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .args(["run", "--", "node", "-e", script])
+        .output()
+        .expect("Failed to run mcp-sentinel with grandchild test");
+
+    let elapsed = start.elapsed();
+    assert!(
+        output.status.success(),
+        "mcp-sentinel should exit successfully"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(4),
+        "Grandchild pipe hang detected: execution took {:?}, must be under 4s",
+        elapsed
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("PARENT_CHILD_EXITED"),
+        "Stdout should contain child output before grandchild detach: {}",
+        stdout
+    );
+}
+
+/// HACK ATTACK 31: BUG-02 Fix Verification - Safe pass-env forwarding & Isolation
+/// Non-secret configuration variables specified in `--pass-env` or `--env` must be passed
+/// to the child, while non-passed environment variables remain completely isolated and invisible.
+#[test]
+fn hack_test_pass_env_forwarding_and_isolation() {
+    let script = r#"
+        console.log('CFG_PORT=' + process.env.MCP_SERVER_PORT);
+        console.log('CFG_HOST=' + process.env.MCP_SERVER_HOST);
+        console.log('UNPASSED=' + process.env.MCP_UNPASSED_SECRET_KEY);
+    "#;
+
+    // Test --pass-env
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SERVER_PORT", "9090")
+        .env("MCP_SERVER_HOST", "127.0.0.1")
+        .env("MCP_UNPASSED_SECRET_KEY", "should_not_leak_to_child")
+        .args([
+            "run",
+            "--pass-env",
+            "MCP_SERVER_PORT,MCP_SERVER_HOST",
+            "--",
+            "node",
+            "-e",
+            script,
+        ])
+        .output()
+        .expect("Failed to run mcp-sentinel with --pass-env");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("CFG_PORT=9090"));
+    assert!(stdout.contains("CFG_HOST=127.0.0.1"));
+    assert!(stdout.contains("UNPASSED=undefined"));
+
+    // Test alias --env
+    let output_alias = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SERVER_PORT", "9090")
+        .env("MCP_UNPASSED_SECRET_KEY", "should_not_leak_to_child")
+        .args([
+            "run",
+            "--env",
+            "MCP_SERVER_PORT",
+            "--",
+            "node",
+            "-e",
+            script,
+        ])
+        .output()
+        .expect("Failed to run mcp-sentinel with --env alias");
+
+    assert!(output_alias.status.success());
+    let stdout_alias = String::from_utf8_lossy(&output_alias.stdout);
+    assert!(stdout_alias.contains("CFG_PORT=9090"));
+    assert!(stdout_alias.contains("CFG_HOST=undefined"));
+    assert!(stdout_alias.contains("UNPASSED=undefined"));
+}
+
+/// HACK ATTACK 32: RISK-02 Fix Verification - Dangerous Runtime Variables Blocked
+/// Setting secrets or passing env for dangerous runtime control variables (e.g. NODE_OPTIONS,
+/// PYTHONPATH, LD_PRELOAD) must be rejected with an explicit security error and never passed down.
+#[test]
+fn hack_test_dangerous_runtime_control_variables_blocked() {
+    // 1. Attempt to set dangerous secret via CLI
+    let dangerous_keys = [
+        "NODE_OPTIONS",
+        "node_options",
+        "PYTHONPATH",
+        "LD_PRELOAD",
+        "DYLD_INSERT_LIBRARIES",
+    ];
+
+    for &key in &dangerous_keys {
+        let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+            .env("MCP_SENTINEL_BYPASS_JOB_CHECK", "1")
+            .args(["secret", "set", key, "malicious_payload"])
+            .output()
+            .expect("Failed to execute secret set");
+
+        assert!(
+            !output.status.success(),
+            "Setting dangerous runtime variable '{}' must fail",
+            key
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("dangerous runtime control variable"),
+            "Stderr for '{}' must mention dangerous runtime control variable: {}",
+            key,
+            stderr
+        );
+    }
+
+    // 2. Attempt to pass dangerous runtime variable via --pass-env -> must NOT leak to child
+    let script = r#"
+        console.log('NODE_OPTIONS=' + process.env.NODE_OPTIONS);
+        console.log('PYTHONPATH=' + process.env.PYTHONPATH);
+    "#;
+
+    let output_pass = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("NODE_OPTIONS", "--require evil.js")
+        .env("PYTHONPATH", "/tmp/malicious")
+        .args([
+            "run",
+            "--pass-env",
+            "NODE_OPTIONS,PYTHONPATH",
+            "--",
+            "node",
+            "-e",
+            script,
+        ])
+        .output()
+        .expect("Failed to execute mcp-sentinel with pass-env of dangerous vars");
+
+    assert!(output_pass.status.success());
+    let stdout_pass = String::from_utf8_lossy(&output_pass.stdout);
+    assert!(stdout_pass.contains("NODE_OPTIONS=undefined"));
+    assert!(stdout_pass.contains("PYTHONPATH=undefined"));
+}
+
+

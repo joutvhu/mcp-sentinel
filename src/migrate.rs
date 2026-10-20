@@ -591,6 +591,13 @@ pub fn transform_config_json(
             new_args.push(secret_specs.join(","));
         }
 
+        if !retained_env.is_empty() {
+            let mut pass_keys: Vec<String> = retained_env.keys().cloned().collect();
+            pass_keys.sort();
+            new_args.push("--pass-env".to_string());
+            new_args.push(pass_keys.join(","));
+        }
+
         new_args.push("--".to_string());
         new_args.push(orig_cmd.clone());
         new_args.extend(orig_args);
@@ -957,6 +964,8 @@ mod tests {
         let args = pg["args"].as_array().unwrap();
         assert!(args.contains(&Value::String("--secrets".to_string())));
         assert!(args.contains(&Value::String("POSTGRES_PASSWORD".to_string())));
+        assert!(args.contains(&Value::String("--pass-env".to_string())));
+        assert!(args.contains(&Value::String("DATABASE_URL".to_string())));
     }
 
     #[test]
@@ -1069,6 +1078,11 @@ mod tests {
         assert!(secrets_val.contains("OPENAI_API_KEY"));
         assert!(secrets_val.contains("DB_PASSWORD"));
         assert!(!secrets_val.contains("GITHUB_API_URL"));
+
+        // --pass-env flag should contain the 3 retained configs sorted
+        let pass_env_idx = args.iter().position(|a| a == "--pass-env").unwrap();
+        let pass_env_val = args[pass_env_idx + 1].as_str().unwrap();
+        assert_eq!(pass_env_val, "GITHUB_API_URL,LOG_LEVEL,WORKSPACE_PATH");
     }
 
     #[test]
@@ -1110,5 +1124,34 @@ mod tests {
         // --secrets flag should NOT be present in args
         let args = server["args"].as_array().unwrap();
         assert!(!args.iter().any(|a| a == "--secrets"));
+
+        // --pass-env flag SHOULD be present in args with sorted keys
+        let pass_env_idx = args.iter().position(|a| a == "--pass-env").unwrap();
+        let pass_env_val = args[pass_env_idx + 1].as_str().unwrap();
+        assert_eq!(pass_env_val, "AWS_REGION,GITHUB_API_URL,LOG_LEVEL,WORKSPACE_DIR");
+    }
+
+    #[test]
+    fn test_transform_config_json_pass_env_formatting_and_sorting() {
+        let input_json = r#"{
+            "mcpServers": {
+                "srv": {
+                    "command": "node",
+                    "args": ["index.js"],
+                    "env": {
+                        "ZEBRA": "1",
+                        "APPLE": "2",
+                        "MANGO": "3"
+                    }
+                }
+            }
+        }"#;
+
+        let (output_json, _) = transform_config_json(input_json, true).unwrap();
+        let parsed: Value = serde_json::from_str(&output_json).unwrap();
+        let args = parsed["mcpServers"]["srv"]["args"].as_array().unwrap();
+        let pass_env_idx = args.iter().position(|a| a == "--pass-env").unwrap();
+        let pass_env_val = args[pass_env_idx + 1].as_str().unwrap();
+        assert_eq!(pass_env_val, "APPLE,MANGO,ZEBRA");
     }
 }

@@ -6,6 +6,26 @@ use std::path::PathBuf;
 
 pub const SERVICE_NAME: &str = "mcp-sentinel";
 
+pub const DANGEROUS_RUNTIME_VARS: &[&str] = &[
+    "NODE_OPTIONS",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "PYTHONHOME",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "RUBYOPT",
+    "PERL5OPT",
+    "BASH_ENV",
+    "ENV",
+];
+
+pub fn is_dangerous_runtime_var(key: &str) -> bool {
+    let upper = key.to_uppercase();
+    DANGEROUS_RUNTIME_VARS.iter().any(|&var| var == upper)
+}
+
 pub fn get_vault_keys_file_path() -> Option<PathBuf> {
     if let Ok(custom) = std::env::var("MCP_SENTINEL_CONFIG_DIR") {
         let dir = PathBuf::from(custom);
@@ -52,6 +72,12 @@ pub fn validate_key_name(key: &str) -> Result<(), String> {
     if key.starts_with("__") || key.to_uppercase().starts_with("MCP_SENTINEL") {
         return Err(format!(
             "Secret key '{}' uses a reserved prefix ('__' or 'MCP_SENTINEL')",
+            key
+        ));
+    }
+    if is_dangerous_runtime_var(key) {
+        return Err(format!(
+            "Secret key '{}' is a dangerous runtime control variable and cannot be set or injected",
             key
         ));
     }
@@ -236,6 +262,12 @@ mod tests {
         assert!(validate_key_name("MCP_SENTINEL_CHILD_CONTEXT").is_err());
         assert!(validate_key_name("mcp_sentinel_fake").is_err());
         assert!(validate_key_name("__INTERNAL_KEY").is_err());
+
+        // Dangerous runtime control variables (RISK-02)
+        for &var in DANGEROUS_RUNTIME_VARS {
+            assert!(validate_key_name(var).is_err(), "Expected {} to be rejected", var);
+            assert!(validate_key_name(&var.to_lowercase()).is_err(), "Expected lowercase {} to be rejected", var);
+        }
 
         // Invalid characters
         assert!(validate_key_name("KEY=VALUE").is_err());
