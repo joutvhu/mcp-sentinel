@@ -14,26 +14,7 @@ fn is_running_in_job() -> bool {
     if std::env::var("MCP_SENTINEL_BYPASS_JOB_CHECK").is_ok() {
         return false;
     }
-    // Only enforce job object restriction when running within a child context.
-    // Integrated terminals in IDEs (VS Code, Cursor, Windsurf) run inside job objects by default;
-    // without this guard, secret commands run by developers in IDE terminals are falsely blocked.
-    if std::env::var("MCP_SENTINEL_CHILD_CONTEXT").is_err() {
-        return false;
-    }
-    unsafe {
-        let mut in_job: windows_sys::Win32::Foundation::BOOL = 0;
-        let proc = windows_sys::Win32::System::Threading::GetCurrentProcess();
-        if windows_sys::Win32::System::JobObjects::IsProcessInJob(
-            proc,
-            std::ptr::null_mut(),
-            &mut in_job,
-        ) != 0
-        {
-            in_job != 0
-        } else {
-            false
-        }
-    }
+    mcp_sentinel::platform::windows::is_current_process_in_job()
 }
 
 #[tokio::main]

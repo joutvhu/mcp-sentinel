@@ -79,21 +79,58 @@ fn get_current_exe_dir() -> Option<&'static std::path::Path> {
         .as_deref()
 }
 
+/// Checks whether a given directory is a shared system/user tool directory
+/// (such as ~/.cargo/bin, /opt/homebrew/bin, /usr/local/bin, /usr/bin, System32, npm, shims, etc.)
+/// where other runtime tools (node, python, git, etc.) reside.
+pub fn is_shared_bin_dir(dir: &std::path::Path) -> bool {
+    let s = dir.to_string_lossy().replace('\\', "/").to_lowercase();
+    let trimmed = s.trim_end_matches('/');
+
+    trimmed.ends_with("/.cargo/bin")
+        || trimmed.ends_with(".cargo/bin")
+        || trimmed.ends_with("/opt/homebrew/bin")
+        || trimmed.ends_with("opt/homebrew/bin")
+        || trimmed.ends_with("/usr/local/bin")
+        || trimmed.ends_with("usr/local/bin")
+        || trimmed.ends_with("/usr/bin")
+        || trimmed == "/bin"
+        || trimmed == "bin"
+        || trimmed.ends_with("/usr/sbin")
+        || trimmed == "/sbin"
+        || trimmed == "sbin"
+        || trimmed.ends_with("/system32")
+        || trimmed.ends_with("/windows")
+        || trimmed.ends_with("/npm")
+        || trimmed.ends_with("/shims")
+        || trimmed.ends_with("/scripts")
+        || trimmed.ends_with("/.local/bin")
+        || trimmed.ends_with(".local/bin")
+}
+
 /// Sanitizes a PATH-like environment string by removing occurrences of `exe_dir`.
+/// If `exe_dir` or the path component is a shared tool directory (like ~/.cargo/bin, /opt/homebrew/bin, etc.),
+/// it is preserved to avoid stripping access to node, python, git, and other runtime tools.
 pub fn sanitize_path(path_val: &str, exe_dir: &std::path::Path) -> std::ffi::OsString {
+    if is_shared_bin_dir(exe_dir) {
+        return std::ffi::OsString::from(path_val);
+    }
+
     let exe_str = exe_dir.to_string_lossy();
     #[cfg(windows)]
-    let exe_norm = exe_str.trim_end_matches(['\\', '/']);
+    let exe_norm = exe_str.replace('/', "\\").trim_end_matches(['\\', '/']).to_lowercase();
     #[cfg(not(windows))]
-    let exe_norm = exe_str.trim_end_matches('/');
+    let exe_norm = exe_str.trim_end_matches('/').to_string();
 
     let filtered_paths: Vec<_> = env::split_paths(path_val)
         .filter(|p| {
+            if is_shared_bin_dir(p) {
+                return true;
+            }
             let p_str = p.to_string_lossy();
             #[cfg(windows)]
             {
-                let p_norm = p_str.trim_end_matches(['\\', '/']);
-                !p_norm.eq_ignore_ascii_case(exe_norm)
+                let p_norm = p_str.replace('/', "\\").trim_end_matches(['\\', '/']).to_lowercase();
+                p_norm != exe_norm
             }
             #[cfg(not(windows))]
             {
@@ -325,5 +362,54 @@ mod tests {
         assert!(!split_cleaned.iter().any(|p| p == &dir_b));
         assert!(split_cleaned.iter().any(|p| p == &dir_a));
         assert!(split_cleaned.iter().any(|p| p == &dir_c));
+    }
+
+    #[test]
+    fn test_sanitize_path_preserves_shared_bin_dirs() {
+        let cargo_bin = std::path::Path::new("/home/user/.cargo/bin");
+        let homebrew_bin = std::path::Path::new("/opt/homebrew/bin");
+        let usr_local_bin = std::path::Path::new("/usr/local/bin");
+        let dedicated_dir = std::path::Path::new("/opt/mcp-sentinel/bin");
+
+        assert!(is_shared_bin_dir(cargo_bin));
+        assert!(is_shared_bin_dir(homebrew_bin));
+        assert!(is_shared_bin_dir(usr_local_bin));
+        assert!(!is_shared_bin_dir(dedicated_dir));
+
+        // When exe_dir is ~/.cargo/bin, sanitize_path must NOT remove it from PATH
+        let path_list = vec![cargo_bin, homebrew_bin, usr_local_bin];
+        let combined = env::join_paths(&path_list).unwrap();
+        let cleaned = sanitize_path(combined.to_str().unwrap(), cargo_bin);
+        let split_cleaned: Vec<_> = env::split_paths(&cleaned).collect();
+
+        assert_eq!(split_cleaned.len(), 3);
+        assert!(split_cleaned.iter().any(|p| p == cargo_bin));
+        assert!(split_cleaned.iter().any(|p| p == homebrew_bin));
+        assert!(split_cleaned.iter().any(|p| p == usr_local_bin));
+
+        // Dedicated dir is still removed, but shared dirs in PATH are preserved
+        let with_dedicated = vec![cargo_bin, dedicated_dir, usr_local_bin];
+        let combined_dedicated = env::join_paths(&with_dedicated).unwrap();
+        let cleaned_dedicated = sanitize_path(combined_dedicated.to_str().unwrap(), dedicated_dir);
+        let split_dedicated: Vec<_> = env::split_paths(&cleaned_dedicated).collect();
+
+        assert_eq!(split_dedicated.len(), 2);
+        assert!(!split_dedicated.iter().any(|p| p == dedicated_dir));
+        assert!(split_dedicated.iter().any(|p| p == cargo_bin));
+        assert!(split_dedicated.iter().any(|p| p == usr_local_bin));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_sanitize_path_windows_slash_normalization() {
+        let dir_b = std::path::Path::new("C:\\tools\\dedicated_sentinel\\bin");
+        let safe_dir = std::path::Path::new("C:\\tools\\other_app\\bin");
+
+        let combined = format!("C:/tools/dedicated_sentinel/bin;C:\\tools\\other_app\\bin");
+        let cleaned = sanitize_path(&combined, dir_b);
+        let split_cleaned: Vec<_> = env::split_paths(&cleaned).collect();
+
+        assert_eq!(split_cleaned.len(), 1);
+        assert!(split_cleaned.iter().any(|p| p == safe_dir));
     }
 }

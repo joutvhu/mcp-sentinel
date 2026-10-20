@@ -42,6 +42,13 @@ pub enum AuthDecision {
     Deny,
 }
 
+/// Checks whether the current process is running inside a remote SSH session.
+pub fn is_ssh_session() -> bool {
+    std::env::var("SSH_CONNECTION").is_ok()
+        || std::env::var("SSH_CLIENT").is_ok()
+        || std::env::var("SSH_TTY").is_ok()
+}
+
 /// Displays a native OS dialog asking the user whether to grant access to secrets.
 /// Offers three options:
 /// - [Allow Always]: Grants access and records permission in permissions.json for future runs.
@@ -83,6 +90,24 @@ pub fn ask_user_permission(
              Tip: Pre-authorize on headless/CI using: mcp-sentinel permissions grant [--name <NAME>] --secrets <SECRETS> -- <COMMAND>"
         );
         return AuthDecision::Deny;
+    }
+
+    // Remote SSH session check:
+    // SSH sessions typically cannot display a GUI prompt (on Windows/macOS or headless Linux).
+    // Immediately return Deny instead of hanging for 30s timeout.
+    if is_ssh_session() {
+        #[cfg(target_os = "linux")]
+        let has_display = std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
+        #[cfg(not(target_os = "linux"))]
+        let has_display = false;
+
+        if !has_display {
+            eprintln!(
+                "[mcp-sentinel] Remote SSH session detected without GUI display. Cannot display interactive consent dialog. Denying access.\n\
+                 Tip: Pre-authorize on headless/SSH using: mcp-sentinel permissions grant [--name <NAME>] --secrets <SECRETS> -- <COMMAND>"
+            );
+            return AuthDecision::Deny;
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -174,6 +199,9 @@ pub fn ask_user_permission(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static DIALOG_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_sanitize_dialog_text_collapses_newlines() {
@@ -192,6 +220,7 @@ mod tests {
 
     #[test]
     fn test_mock_dialog_response() {
+        let _guard = DIALOG_TEST_LOCK.lock().unwrap();
         let dummy_cmd = vec!["dummy_cmd".to_string(), "--arg".to_string()];
         std::env::set_var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE", "allow_once");
         let decision = ask_user_permission(&dummy_cmd, Some("test_server"), &["KEY1".to_string()]);
@@ -221,6 +250,7 @@ mod tests {
 
     #[test]
     fn test_ask_user_permission_with_long_command() {
+        let _guard = DIALOG_TEST_LOCK.lock().unwrap();
         let long_args: Vec<String> = (0..50).map(|i| format!("--argument-{}", i)).collect();
         let mut cmd = vec!["npx".to_string()];
         cmd.extend(long_args);
@@ -229,5 +259,52 @@ mod tests {
         let decision = ask_user_permission(&cmd, Some("my_server"), &["SECRET_1".to_string()]);
         assert_eq!(decision, AuthDecision::AllowOnce);
         std::env::remove_var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE");
+    }
+
+    #[test]
+    fn test_is_ssh_session_detection() {
+        let _guard = DIALOG_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("SSH_CONNECTION");
+        std::env::remove_var("SSH_CLIENT");
+        std::env::remove_var("SSH_TTY");
+        assert!(!is_ssh_session());
+
+        std::env::set_var("SSH_CONNECTION", "192.168.1.50 51234 192.168.1.1 22");
+        assert!(is_ssh_session());
+        std::env::remove_var("SSH_CONNECTION");
+
+        std::env::set_var("SSH_CLIENT", "192.168.1.50 51234 22");
+        assert!(is_ssh_session());
+        std::env::remove_var("SSH_CLIENT");
+
+        std::env::set_var("SSH_TTY", "/dev/pts/1");
+        assert!(is_ssh_session());
+        std::env::remove_var("SSH_TTY");
+    }
+
+    #[test]
+    fn test_ssh_session_denies_immediately_without_hanging() {
+        let _guard = DIALOG_TEST_LOCK.lock().unwrap();
+        let cmd = vec!["node".to_string(), "server.js".to_string()];
+        std::env::remove_var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE");
+        std::env::remove_var("CI");
+        std::env::remove_var("GITHUB_ACTIONS");
+        std::env::remove_var("MCP_SENTINEL_NON_INTERACTIVE");
+        std::env::remove_var("MCP_SENTINEL_TEST_MODE");
+
+        std::env::set_var("SSH_CONNECTION", "10.0.0.1 50000 10.0.0.2 22");
+
+        let start = std::time::Instant::now();
+        let decision = ask_user_permission(&cmd, Some("ssh_server"), &["SECRET_SSH".to_string()]);
+        let elapsed = start.elapsed();
+
+        std::env::remove_var("SSH_CONNECTION");
+
+        assert_eq!(decision, AuthDecision::Deny);
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "SSH prompt must return immediately without waiting for 30s timeout! Elapsed: {:?}",
+            elapsed
+        );
     }
 }

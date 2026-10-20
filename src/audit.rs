@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use crate::policy::get_config_dir;
 
 pub const AUDIT_LOG_FILE_NAME: &str = "audit.log";
+pub const AUDIT_LOCK_FILE_NAME: &str = ".audit.lock";
 pub const MAX_AUDIT_LOG_SIZE: u64 = 5 * 1024 * 1024; // 5 MB
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -84,6 +85,12 @@ pub fn get_audit_log_path() -> Result<PathBuf, String> {
     Ok(dir.join(AUDIT_LOG_FILE_NAME))
 }
 
+/// Resolves the filesystem path to `.audit.lock`.
+pub fn get_audit_lock_path() -> Result<PathBuf, String> {
+    let dir = get_config_dir()?;
+    Ok(dir.join(AUDIT_LOCK_FILE_NAME))
+}
+
 /// Determines whether auditing is active based on the CLI `--audit` flag and `MCP_SENTINEL_AUDIT` env var.
 /// Default is strictly `false` (Disabled by default).
 pub fn is_audit_enabled(cli_flag: bool) -> bool {
@@ -104,7 +111,19 @@ fn rotate_if_needed(path: &PathBuf) -> Result<(), String> {
     if let Ok(meta) = fs::metadata(path) {
         if meta.len() >= MAX_AUDIT_LOG_SIZE {
             let backup_path = path.with_extension("log.1");
-            let _ = fs::rename(path, backup_path);
+            if backup_path.exists() {
+                let _ = fs::remove_file(&backup_path);
+            }
+            if let Err(_e) = fs::rename(path, &backup_path) {
+                // Safe fallback for Windows sharing violations or cross-device links:
+                // Attempt copy and truncate; if even that fails, ignore so proxy flow is not blocked.
+                if fs::copy(path, &backup_path).is_ok() {
+                    let _ = OpenOptions::new()
+                        .write(true)
+                        .truncate(true)
+                        .open(path);
+                }
+            }
         }
     }
     Ok(())
@@ -112,6 +131,9 @@ fn rotate_if_needed(path: &PathBuf) -> Result<(), String> {
 
 /// Appends an `AuditEntry` to `audit.log` as a single-line JSON string.
 pub fn log_event(entry: &AuditEntry) -> Result<(), String> {
+    let lock_path = get_audit_lock_path()?;
+    let _lock = crate::lock::FileLock::acquire(&lock_path)?;
+
     let log_path = get_audit_log_path()?;
     rotate_if_needed(&log_path)?;
 
@@ -186,6 +208,9 @@ pub fn read_entries(
 
 /// Purges all entries from `audit.log`.
 pub fn clear_log() -> Result<bool, String> {
+    let lock_path = get_audit_lock_path()?;
+    let _lock = crate::lock::FileLock::acquire(&lock_path)?;
+
     let log_path = get_audit_log_path()?;
     let mut removed = false;
     if log_path.exists() {

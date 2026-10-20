@@ -1589,10 +1589,10 @@ fn hack_test_tofu_profile_mismatch_requires_reauthorization() {
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
-/// HACK ATTACK 29: OS Job Object Sandbox & IDE Compatibility
-/// Running inside a Job Object without child context (e.g. VS Code, Cursor, Windsurf integrated terminals)
-/// must NOT trigger false positive Security Violations.
-/// However, running inside a Job Object within a child context must be strictly blocked with exit code 13.
+/// HACK ATTACK 29: OS Job Object Sandbox & Child Bypass Prevention
+/// A process running inside a Job Object attempting to access secrets must be strictly blocked
+/// with exit code 13, even if an attacker or malicious child unset the MCP_SENTINEL_CHILD_CONTEXT env var.
+/// The check can be overridden only via MCP_SENTINEL_BYPASS_JOB_CHECK=1 for trusted workflows/tests.
 #[test]
 #[cfg(windows)]
 fn hack_test_job_object_blocks_secret_access_even_without_child_context_env() {
@@ -1600,47 +1600,15 @@ fn hack_test_job_object_blocks_secret_access_even_without_child_context_env() {
 
     use std::os::windows::io::AsRawHandle;
 
-    // 1. Without child context (IDE integrated terminal simulation) -> permitted (no exit code 13)
-    let script_ide = format!(
-        "Start-Sleep -Milliseconds 100; & '{}' secrets list; exit $LASTEXITCODE",
-        env!("CARGO_BIN_EXE_mcp-sentinel").replace('\'', "''")
-    );
-
-    let child_ide = Command::new("powershell")
-        .args(["-NoProfile", "-Command", &script_ide])
-        .env_remove("MCP_SENTINEL_CHILD_CONTEXT")
-        .env_remove("MCP_SENTINEL_BYPASS_JOB_CHECK")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("Failed to spawn powershell child for IDE simulation");
-
-    unsafe {
-        let _ = job.assign_process(child_ide.as_raw_handle() as _);
-    }
-
-    let output_ide = child_ide.wait_with_output().expect("Failed to read output");
-    let stderr_ide = String::from_utf8_lossy(&output_ide.stderr);
-    assert_ne!(
-        output_ide.status.code(),
-        Some(13),
-        "IDE terminal in Job Object without child context must not be blocked with code 13. Stderr: {}",
-        stderr_ide
-    );
-    assert!(
-        !stderr_ide.contains("Security Violation"),
-        "IDE terminal in Job Object without child context must not trigger Security Violation"
-    );
-
-    // 2. With child context (sandboxed child process simulation) -> blocked with exit code 13
     let script_child = format!(
         "Start-Sleep -Milliseconds 100; & '{}' secrets list; exit $LASTEXITCODE",
         env!("CARGO_BIN_EXE_mcp-sentinel").replace('\'', "''")
     );
 
-    let child_sandboxed = Command::new("powershell")
+    // 1. Without child context (attacker stripped MCP_SENTINEL_CHILD_CONTEXT) -> still blocked with code 13
+    let child_no_env = Command::new("powershell")
         .args(["-NoProfile", "-Command", &script_child])
-        .env("MCP_SENTINEL_CHILD_CONTEXT", "1")
+        .env_remove("MCP_SENTINEL_CHILD_CONTEXT")
         .env_remove("MCP_SENTINEL_BYPASS_JOB_CHECK")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -1648,18 +1616,44 @@ fn hack_test_job_object_blocks_secret_access_even_without_child_context_env() {
         .expect("Failed to spawn powershell child for sandbox simulation");
 
     unsafe {
-        let _ = job.assign_process(child_sandboxed.as_raw_handle() as _);
+        let _ = job.assign_process(child_no_env.as_raw_handle() as _);
     }
 
-    let output_sandboxed = child_sandboxed.wait_with_output().expect("Failed to read output");
-    let stderr_sandboxed = String::from_utf8_lossy(&output_sandboxed.stderr);
+    let output_no_env = child_no_env.wait_with_output().expect("Failed to read output");
+    let stderr_no_env = String::from_utf8_lossy(&output_no_env.stderr);
     assert_eq!(
-        output_sandboxed.status.code(),
+        output_no_env.status.code(),
         Some(13),
-        "Secrets access from within sandboxed child process in Job Object must exit with code 13. Stderr: {}",
-        stderr_sandboxed
+        "Secrets access from within Job Object even without child context env must exit with code 13. Stderr: {}",
+        stderr_no_env
     );
-    assert!(stderr_sandboxed.contains("Security Violation"));
+    assert!(
+        stderr_no_env.contains("Security Violation"),
+        "Must output security violation message"
+    );
+
+    // 2. With MCP_SENTINEL_BYPASS_JOB_CHECK=1 -> permitted (for test/trusted override)
+    let child_bypass = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script_child])
+        .env_remove("MCP_SENTINEL_CHILD_CONTEXT")
+        .env("MCP_SENTINEL_BYPASS_JOB_CHECK", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn powershell child for bypass simulation");
+
+    unsafe {
+        let _ = job.assign_process(child_bypass.as_raw_handle() as _);
+    }
+
+    let output_bypass = child_bypass.wait_with_output().expect("Failed to read output");
+    let stderr_bypass = String::from_utf8_lossy(&output_bypass.stderr);
+    assert_ne!(
+        output_bypass.status.code(),
+        Some(13),
+        "With bypass flag set, must not be blocked with code 13. Stderr: {}",
+        stderr_bypass
+    );
 }
 
 /// HACK ATTACK 30: BUG-01 Fix Verification - Grandchild Pipe Hang Mitigation

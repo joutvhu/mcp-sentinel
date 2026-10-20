@@ -60,3 +60,22 @@ impl Drop for JobObjectGuard {
         }
     }
 }
+
+/// Checks if the current process is assigned to an OS Job Object.
+#[cfg(windows)]
+pub fn is_current_process_in_job() -> bool {
+    unsafe {
+        let mut in_job: windows_sys::Win32::Foundation::BOOL = 0;
+        let proc = windows_sys::Win32::System::Threading::GetCurrentProcess();
+        if windows_sys::Win32::System::JobObjects::IsProcessInJob(
+            proc,
+            std::ptr::null_mut(),
+            &mut in_job,
+        ) != 0
+        {
+            in_job != 0
+        } else {
+            false
+        }
+    }
+}
