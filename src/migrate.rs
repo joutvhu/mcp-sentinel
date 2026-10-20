@@ -460,7 +460,9 @@ pub fn transform_config_json(
             .ok()
             .and_then(|p| {
                 let file_name = p.file_name()?.to_str()?;
-                if file_name == "mcp-sentinel" || file_name == "mcp-sentinel.exe" {
+                if file_name.eq_ignore_ascii_case("mcp-sentinel")
+                    || file_name.eq_ignore_ascii_case("mcp-sentinel.exe")
+                {
                     Some(p.to_string_lossy().to_string())
                 } else {
                     None

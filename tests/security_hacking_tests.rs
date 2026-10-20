@@ -1589,40 +1589,76 @@ fn hack_test_tofu_profile_mismatch_requires_reauthorization() {
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
-/// HACK ATTACK 29: OS Job Object Sandbox Blocks Secret Access
-/// Even if MCP_SENTINEL_CHILD_CONTEXT is stripped or unset, running inside a Job Object must be blocked with exit code 13.
+/// HACK ATTACK 29: OS Job Object Sandbox & IDE Compatibility
+/// Running inside a Job Object without child context (e.g. VS Code, Cursor, Windsurf integrated terminals)
+/// must NOT trigger false positive Security Violations.
+/// However, running inside a Job Object within a child context must be strictly blocked with exit code 13.
 #[test]
 #[cfg(windows)]
 fn hack_test_job_object_blocks_secret_access_even_without_child_context_env() {
     let job = mcp_sentinel::platform::windows::JobObjectGuard::new().expect("Failed to create Job Object");
 
-    let script = format!(
-        "Start-Sleep -Milliseconds 100; $env:MCP_SENTINEL_CHILD_CONTEXT = ''; & '{}' secrets list; exit $LASTEXITCODE",
+    use std::os::windows::io::AsRawHandle;
+
+    // 1. Without child context (IDE integrated terminal simulation) -> permitted (no exit code 13)
+    let script_ide = format!(
+        "Start-Sleep -Milliseconds 100; & '{}' secrets list; exit $LASTEXITCODE",
         env!("CARGO_BIN_EXE_mcp-sentinel").replace('\'', "''")
     );
 
-    use std::os::windows::io::AsRawHandle;
-    let child = Command::new("powershell")
-        .args(["-NoProfile", "-Command", &script])
+    let child_ide = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script_ide])
         .env_remove("MCP_SENTINEL_CHILD_CONTEXT")
         .env_remove("MCP_SENTINEL_BYPASS_JOB_CHECK")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .expect("Failed to spawn powershell child");
+        .expect("Failed to spawn powershell child for IDE simulation");
 
     unsafe {
-        let _ = job.assign_process(child.as_raw_handle() as _);
+        let _ = job.assign_process(child_ide.as_raw_handle() as _);
     }
 
-    let output = child.wait_with_output().expect("Failed to read output");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(
-        output.status.code(),
+    let output_ide = child_ide.wait_with_output().expect("Failed to read output");
+    let stderr_ide = String::from_utf8_lossy(&output_ide.stderr);
+    assert_ne!(
+        output_ide.status.code(),
         Some(13),
-        "Secrets access from within Job Object must exit with code 13. Stderr: {}",
-        stderr
+        "IDE terminal in Job Object without child context must not be blocked with code 13. Stderr: {}",
+        stderr_ide
     );
-    assert!(stderr.contains("Security Violation"));
+    assert!(
+        !stderr_ide.contains("Security Violation"),
+        "IDE terminal in Job Object without child context must not trigger Security Violation"
+    );
+
+    // 2. With child context (sandboxed child process simulation) -> blocked with exit code 13
+    let script_child = format!(
+        "Start-Sleep -Milliseconds 100; & '{}' secrets list; exit $LASTEXITCODE",
+        env!("CARGO_BIN_EXE_mcp-sentinel").replace('\'', "''")
+    );
+
+    let child_sandboxed = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script_child])
+        .env("MCP_SENTINEL_CHILD_CONTEXT", "1")
+        .env_remove("MCP_SENTINEL_BYPASS_JOB_CHECK")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn powershell child for sandbox simulation");
+
+    unsafe {
+        let _ = job.assign_process(child_sandboxed.as_raw_handle() as _);
+    }
+
+    let output_sandboxed = child_sandboxed.wait_with_output().expect("Failed to read output");
+    let stderr_sandboxed = String::from_utf8_lossy(&output_sandboxed.stderr);
+    assert_eq!(
+        output_sandboxed.status.code(),
+        Some(13),
+        "Secrets access from within sandboxed child process in Job Object must exit with code 13. Stderr: {}",
+        stderr_sandboxed
+    );
+    assert!(stderr_sandboxed.contains("Security Violation"));
 }
 

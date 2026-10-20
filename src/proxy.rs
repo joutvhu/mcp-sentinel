@@ -23,7 +23,11 @@ fn check_single_tool_request(
     audit_enabled: bool,
     server_name: &str,
 ) -> Option<serde_json::Value> {
-    if req.get("method").and_then(|m| m.as_str()) != Some("tools/call") {
+    let method = match req.get("method").and_then(|m| m.as_str()) {
+        Some(m) => m.trim(),
+        None => return None,
+    };
+    if !method.eq_ignore_ascii_case("tools/call") {
         return None;
     }
 
@@ -550,5 +554,19 @@ pub async fn run_child_and_pipe(
     let _ = stdout_writer_task.await;
     let _ = err_task.await;
 
-    Ok(status.code().unwrap_or(0))
+    #[cfg(unix)]
+    let code = {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(c) = status.code() {
+            c
+        } else if let Some(sig) = status.signal() {
+            128 + sig
+        } else {
+            1
+        }
+    };
+    #[cfg(not(unix))]
+    let code = status.code().unwrap_or(1);
+
+    Ok(code)
 }

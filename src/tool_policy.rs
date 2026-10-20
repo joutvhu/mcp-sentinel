@@ -306,17 +306,12 @@ pub fn load_profiles_unlocked() -> Result<ToolPolicyFile, String> {
         Some(ref sig) if sig == &expected_sig => Ok(file),
         _ => {
             eprintln!(
-                "[mcp-sentinel] Security Warning: Tampered or unsigned tool_policies.json detected! Discarding tampered file and restoring defaults."
+                "[mcp-sentinel] Security Warning: Tampered or unsigned tool_policies.json detected! Discarding untrusted profiles and using default presets in memory."
             );
-            let backup_path = file_path.with_extension("json.tampered");
-            let _ = fs::rename(&file_path, backup_path);
-
-            let fallback = ToolPolicyFile {
+            Ok(ToolPolicyFile {
                 profiles: default_preset_profiles(),
                 signature: None,
-            };
-            save_profiles_unlocked(&fallback)?;
-            Ok(fallback)
+            })
         }
     }
 }
