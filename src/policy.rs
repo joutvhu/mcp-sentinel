@@ -18,6 +18,8 @@ pub struct Grant {
     pub name: Option<String>,
     pub command: String,
     pub granted_secrets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -169,10 +171,19 @@ pub fn get_policy_lock_path() -> Result<PathBuf, String> {
 }
 
 pub fn compute_fingerprint(cmd: &[String]) -> String {
+    compute_fingerprint_with_profile(cmd, None)
+}
+
+pub fn compute_fingerprint_with_profile(cmd: &[String], profile: Option<&str>) -> String {
     let mut hasher = Sha256::new();
     for arg in cmd {
         hasher.update(arg.as_bytes());
         hasher.update(b"\0"); // Null-byte separator avoids delimiter collisions
+    }
+    if let Some(prof) = profile {
+        hasher.update(b"profile:");
+        hasher.update(prof.as_bytes());
+        hasher.update(b"\0");
     }
     hex::encode(hasher.finalize())
 }
@@ -270,12 +281,24 @@ pub fn save_policy(policy: &PolicyFile) -> Result<(), String> {
 
 /// Checks whether all requested secrets have already been authorized for this command fingerprint.
 pub fn is_authorized(fingerprint: &str, requested_secrets: &[String]) -> bool {
+    is_authorized_with_profile(fingerprint, requested_secrets, None)
+}
+
+/// Checks whether all requested secrets have already been authorized for this command fingerprint and profile.
+pub fn is_authorized_with_profile(
+    fingerprint: &str,
+    requested_secrets: &[String],
+    expected_profile: Option<&str>,
+) -> bool {
     if requested_secrets.is_empty() {
         return true;
     }
 
     let policy = load_policy();
     if let Some(grant) = policy.grants.get(fingerprint) {
+        if grant.profile.as_deref() != expected_profile {
+            return false;
+        }
         let granted_set: HashSet<&String> = grant.granted_secrets.iter().collect();
         requested_secrets.iter().all(|s| granted_set.contains(s))
     } else {
@@ -290,6 +313,17 @@ pub fn record_grant(
     cmd: &[String],
     approved_secrets: &[String],
 ) -> Result<(), String> {
+    record_grant_with_profile(fingerprint, name, cmd, approved_secrets, None)
+}
+
+/// Records approval for requested secrets under the command fingerprint with an optional profile.
+pub fn record_grant_with_profile(
+    fingerprint: &str,
+    name: Option<String>,
+    cmd: &[String],
+    approved_secrets: &[String],
+    profile: Option<String>,
+) -> Result<(), String> {
     modify_policy(|policy| {
         let command_str = cmd.join(" ");
 
@@ -301,8 +335,13 @@ pub fn record_grant(
                 name,
                 command: command_str,
                 granted_secrets: Vec::new(),
+                profile: profile.clone(),
                 created_at: Utc::now(),
             });
+
+        if entry.profile.is_none() && profile.is_some() {
+            entry.profile = profile;
+        }
 
         let mut set: HashSet<String> = entry.granted_secrets.drain(..).collect();
         for s in approved_secrets {
@@ -413,6 +452,7 @@ mod tests {
                 name: Some("Sample".to_string()),
                 command: "node index.js".to_string(),
                 granted_secrets: vec!["GITHUB_TOKEN".to_string()],
+                profile: None,
                 created_at: Utc::now(),
             },
         );
@@ -472,5 +512,45 @@ mod tests {
         std::env::remove_var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE");
         std::env::remove_var("MCP_SENTINEL_CONFIG_DIR");
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_fingerprint_with_profile() {
+        let cmd = vec!["node".to_string(), "server.js".to_string()];
+        let fp_none = compute_fingerprint(&cmd);
+        let fp_prof1 = compute_fingerprint_with_profile(&cmd, Some("read-only"));
+        let fp_prof2 = compute_fingerprint_with_profile(&cmd, Some("full-access"));
+
+        assert_ne!(fp_none, fp_prof1);
+        assert_ne!(fp_prof1, fp_prof2);
+        assert_eq!(fp_none, compute_fingerprint_with_profile(&cmd, None));
+    }
+
+    #[test]
+    fn test_grant_profile_mismatch_denied() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        let cmd = vec!["node".to_string(), "profile_test.js".to_string()];
+        let fp_ro = compute_fingerprint_with_profile(&cmd, Some("read-only"));
+        let secrets = vec!["SECRET_A".to_string()];
+
+        // Record grant with read-only profile
+        let rec = record_grant_with_profile(
+            &fp_ro,
+            Some("Profile Server".to_string()),
+            &cmd,
+            &secrets,
+            Some("read-only".to_string()),
+        );
+        assert!(rec.is_ok());
+
+        // Authorized with same profile
+        assert!(is_authorized_with_profile(&fp_ro, &secrets, Some("read-only")));
+
+        // Unauthorized if no profile or different profile requested
+        assert!(!is_authorized_with_profile(&fp_ro, &secrets, None));
+        assert!(!is_authorized_with_profile(&fp_ro, &secrets, Some("admin")));
+
+        // Revoke
+        let _ = revoke_grant(&fp_ro);
     }
 }

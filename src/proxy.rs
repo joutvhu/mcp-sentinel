@@ -3,7 +3,17 @@ use std::process::Stdio;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
-pub const MAX_IN_BUF_SIZE: usize = 4 * 1024 * 1024; // 4 MB
+pub const DEFAULT_MAX_IN_BUF_SIZE: usize = 16 * 1024 * 1024; // 16 MB
+pub const MAX_IN_BUF_SIZE: usize = DEFAULT_MAX_IN_BUF_SIZE;
+
+/// Returns the effective maximum STDIN buffer size, allowing runtime configuration
+/// via the `MCP_SENTINEL_MAX_BUFFER` environment variable (defaults to 16 MB).
+pub fn get_max_in_buf_size() -> usize {
+    std::env::var("MCP_SENTINEL_MAX_BUFFER")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_IN_BUF_SIZE)
+}
 
 /// Evaluates a single JSON-RPC request object against the active tool policy.
 /// Returns Some(error_response_value) if blocked, None if allowed.
@@ -278,6 +288,7 @@ pub async fn run_child_and_pipe(
         let _ = host_stdout.flush().await;
     });
 
+    let max_buf_size = get_max_in_buf_size();
     // Spawn async background tasks for stdin, stdout, stderr forwarding
     let mut in_task = tokio::spawn(async move {
         if tool_profile.is_some() || audit_enabled {
@@ -292,10 +303,10 @@ pub async fn run_child_and_pipe(
                 };
                 in_buf.extend_from_slice(&read_buf[..n]);
 
-                if in_buf.len() > MAX_IN_BUF_SIZE {
+                if in_buf.len() > max_buf_size {
                     eprintln!(
                         "[mcp-sentinel] Security Alert: Stdin buffer exceeded max capacity ({} bytes). Terminating input stream to prevent memory exhaustion DoS.",
-                        MAX_IN_BUF_SIZE
+                        max_buf_size
                     );
                     in_buf.clear();
                     break;
@@ -466,10 +477,17 @@ pub async fn run_child_and_pipe(
     let err_task = tokio::spawn(async move {
         let _ = tokio::io::copy(&mut child_stderr, &mut host_stderr).await;
     });
+
+    #[cfg(unix)]
+    let mut sigterm =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+
     // We wait for EITHER:
     // 1. The child process exits on its own (child.wait() completes).
     // 2. OR host STDIN reaches EOF (in_task finishes). Once STDIN closes, we give the child
     //    a graceful 5-second timeout to exit before sending kill.
+    // 3. User interrupts via Ctrl+C / SIGINT.
+    // 4. (Unix) Process termination signal SIGTERM.
     let status = tokio::select! {
         res = child.wait() => {
             res?
@@ -484,6 +502,43 @@ pub async fn run_child_and_pipe(
                     child.wait().await?
                 }
             }
+        }
+        _ = tokio::signal::ctrl_c() => {
+            #[cfg(unix)]
+            {
+                if let Some(pid) = child.id() {
+                    unsafe {
+                        libc::kill(-(pid as i32), libc::SIGTERM);
+                    }
+                }
+            }
+            let _ = child.kill().await;
+            child.wait().await?
+        }
+        _ = async {
+            #[cfg(unix)]
+            {
+                if let Some(ref mut sig) = sigterm {
+                    sig.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                std::future::pending::<()>().await;
+            }
+        } => {
+            #[cfg(unix)]
+            {
+                if let Some(pid) = child.id() {
+                    unsafe {
+                        libc::kill(-(pid as i32), libc::SIGTERM);
+                    }
+                }
+            }
+            let _ = child.kill().await;
+            child.wait().await?
         }
     };
 

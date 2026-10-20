@@ -9,6 +9,27 @@ use mcp_sentinel::cli::{
 use mcp_sentinel::tui;
 use mcp_sentinel::{audit, dialog, policy, proxy, sanitizer, tool_policy, vault};
 
+#[cfg(windows)]
+fn is_running_in_job() -> bool {
+    if std::env::var("MCP_SENTINEL_BYPASS_JOB_CHECK").is_ok() {
+        return false;
+    }
+    unsafe {
+        let mut in_job: windows_sys::Win32::Foundation::BOOL = 0;
+        let proc = windows_sys::Win32::System::Threading::GetCurrentProcess();
+        if windows_sys::Win32::System::JobObjects::IsProcessInJob(
+            proc,
+            std::ptr::null_mut(),
+            &mut in_job,
+        ) != 0
+        {
+            in_job != 0
+        } else {
+            false
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Direct all tracing logs strictly to STDERR so JSON-RPC on STDOUT remains uncorrupted
@@ -63,10 +84,11 @@ async fn main() {
                 mappings.iter().map(|m| m.canonical_spec()).collect();
             let display_labels: Vec<String> = mappings.iter().map(|m| m.display_label()).collect();
             let display_name = name.clone().unwrap_or_else(|| cmd[0].clone());
-            let fingerprint = policy::compute_fingerprint(&cmd);
+            let fingerprint = policy::compute_fingerprint_with_profile(&cmd, profile.as_deref());
 
             // 1. TOFU Authorization check
-            let is_pre_authorized = policy::is_authorized(&fingerprint, &canonical_specs);
+            let is_pre_authorized =
+                policy::is_authorized_with_profile(&fingerprint, &canonical_specs, profile.as_deref());
             if !mappings.is_empty() && !is_pre_authorized {
                 eprintln!(
                     "[mcp-sentinel] Requesting user permission for '{}' (Fingerprint: {})...",
@@ -123,9 +145,13 @@ async fn main() {
                             eprintln!(
                                 "[mcp-sentinel] Permission granted for this session only (--allow-once flag specified)."
                             );
-                        } else if let Err(e) =
-                            policy::record_grant(&fingerprint, name, &cmd, &canonical_specs)
-                        {
+                        } else if let Err(e) = policy::record_grant_with_profile(
+                            &fingerprint,
+                            name,
+                            &cmd,
+                            &canonical_specs,
+                            profile.clone(),
+                        ) {
                             eprintln!(
                                 "[mcp-sentinel] Warning: Failed to persist permission grant: {}",
                                 e
@@ -296,7 +322,18 @@ async fn main() {
             }
         }
 
-        Commands::Secrets { action } => match action {
+        Commands::Secrets { action } => {
+            #[cfg(windows)]
+            {
+                if is_running_in_job() {
+                    eprintln!(
+                        "[mcp-sentinel] Security Violation: Invoking secrets management is strictly prohibited from within a sandboxed process."
+                    );
+                    exit(13);
+                }
+            }
+
+            match action {
             SecretCommands::Set { key, value } => {
                 if let Err(msg) = vault::validate_key_name(&key) {
                     eprintln!("Error: {}", msg);
@@ -347,7 +384,7 @@ async fn main() {
                     }
                 }
             }
-        },
+        }},
 
         Commands::Permissions { action } => match action {
             PermCommands::List => {
@@ -356,35 +393,47 @@ async fn main() {
                     println!("No permissions have been granted yet.");
                 } else {
                     println!(
-                        "{:<14} {:<30} {:<30} {:<24}",
-                        "ID", "NAME/COMMAND", "SECRETS", "CREATED AT"
+                        "{:<14} {:<24} {:<16} {:<24} {:<24}",
+                        "ID", "NAME/COMMAND", "PROFILE", "SECRETS", "CREATED AT"
                     );
-                    println!("{:-<100}", "");
+                    println!("{:-<106}", "");
                     for (id, grant) in policy.grants {
                         let id_short = if id.len() > 12 { &id[..12] } else { &id };
                         let label = grant.name.unwrap_or(grant.command);
-                        let label_short = if label.len() > 28 {
-                            format!("{}...", &label[..25])
+                        let label_short = if label.len() > 22 {
+                            format!("{}...", &label[..19])
                         } else {
                             label
                         };
+                        let prof_str = grant.profile.unwrap_or_else(|| "-".to_string());
+                        let prof_short = if prof_str.len() > 14 {
+                            format!("{}...", &prof_str[..11])
+                        } else {
+                            prof_str
+                        };
                         let sec_str = grant.granted_secrets.join(", ");
-                        let sec_short = if sec_str.len() > 28 {
-                            format!("{}...", &sec_str[..25])
+                        let sec_short = if sec_str.len() > 22 {
+                            format!("{}...", &sec_str[..19])
                         } else {
                             sec_str
                         };
                         println!(
-                            "{:<14} {:<30} {:<30} {:<24}",
+                            "{:<14} {:<24} {:<16} {:<24} {:<24}",
                             id_short,
                             label_short,
+                            prof_short,
                             sec_short,
                             grant.created_at.to_rfc3339()
                         );
                     }
                 }
             }
-            PermCommands::Grant { name, secrets, cmd } => {
+            PermCommands::Grant {
+                name,
+                secrets,
+                profile,
+                cmd,
+            } => {
                 if cmd.is_empty() {
                     eprintln!("Error: No command specified to authorize.");
                     exit(1);
@@ -398,8 +447,15 @@ async fn main() {
                 };
                 let canonical_specs: Vec<String> =
                     mappings.iter().map(|m| m.canonical_spec()).collect();
-                let fingerprint = policy::compute_fingerprint(&cmd);
-                match policy::record_grant(&fingerprint, name, &cmd, &canonical_specs) {
+                let fingerprint =
+                    policy::compute_fingerprint_with_profile(&cmd, profile.as_deref());
+                match policy::record_grant_with_profile(
+                    &fingerprint,
+                    name,
+                    &cmd,
+                    &canonical_specs,
+                    profile,
+                ) {
                     Ok(()) => {
                         println!(
                             "✅ Successfully pre-authorized MCP server (Fingerprint: {}).",

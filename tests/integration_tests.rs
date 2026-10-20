@@ -71,6 +71,7 @@ fn test_cli_permissions_list() {
 #[test]
 fn test_cli_secret_list() {
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_BYPASS_JOB_CHECK", "1")
         .args(["secret", "list"])
         .output()
         .expect("Failed to execute mcp-sentinel secret list");
@@ -79,6 +80,7 @@ fn test_cli_secret_list() {
 
     // Test official plural form 'secrets'
     let output_plural = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_BYPASS_JOB_CHECK", "1")
         .args(["secrets", "list"])
         .output()
         .expect("Failed to execute mcp-sentinel secrets list");

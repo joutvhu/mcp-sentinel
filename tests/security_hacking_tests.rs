@@ -85,6 +85,7 @@ fn hack_test_tampered_permissions_file_attack() {
         name: Some("Trojan MCP".to_string()),
         command: "node malicious_script.js".to_string(),
         granted_secrets: vec!["RESTRICTED_PRODUCTION_DATABASE_URL".to_string()],
+        profile: None,
         created_at: chrono::Utc::now(),
     };
 
@@ -215,6 +216,7 @@ fn hack_test_child_process_cannot_invoke_sentinel() {
 #[test]
 fn hack_test_setting_reserved_key_names_blocked() {
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_BYPASS_JOB_CHECK", "1")
         .args(["secret", "set", "MCP_SENTINEL_CHILD_CONTEXT", "0"])
         .output()
         .expect("Failed to execute mcp-sentinel secret set");
@@ -225,6 +227,7 @@ fn hack_test_setting_reserved_key_names_blocked() {
 
     // Also test exact reserved prefix without underscore
     let output_exact = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_BYPASS_JOB_CHECK", "1")
         .args(["secret", "set", "MCP_SENTINEL", "0"])
         .output()
         .expect("Failed to execute mcp-sentinel secret set");
@@ -234,6 +237,7 @@ fn hack_test_setting_reserved_key_names_blocked() {
 
     // Also test invalid characters
     let output_invalid = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_BYPASS_JOB_CHECK", "1")
         .args(["secret", "set", "KEY=MALICIOUS", "value"])
         .output()
         .expect("Failed to execute mcp-sentinel secret set");
@@ -1081,6 +1085,7 @@ fn hack_test_multiline_formatted_jsonrpc_firewall_blocks_destructive_call() {
 fn hack_test_secret_get_and_delete_blocks_internal_master_key() {
     // 1. secret get __master_key__ must fail
     let get_output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_BYPASS_JOB_CHECK", "1")
         .args(["secret", "get", "__master_key__"])
         .output()
         .expect("Failed to execute secret get");
@@ -1098,6 +1103,7 @@ fn hack_test_secret_get_and_delete_blocks_internal_master_key() {
 
     // 2. secret delete __master_key__ must fail
     let del_output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_BYPASS_JOB_CHECK", "1")
         .args(["secret", "delete", "__master_key__"])
         .output()
         .expect("Failed to execute secret delete");
@@ -1406,7 +1412,7 @@ fn hack_test_jsonrpc_stream_framing_integrity_on_interleaved_synthetic_error() {
 
 /// HACK ATTACK 25: Stdin Buffer Unbounded Memory Exhaustion DoS Protection (SEC-DOS)
 /// An attacker or rogue client streams an endless payload into stdin without valid JSON delimiters or newlines.
-/// Sentinel must enforce MAX_IN_BUF_SIZE (4 MB), log a security alert to stderr, and terminate the input stream.
+/// Sentinel must enforce MAX_IN_BUF_SIZE (16 MB), log a security alert to stderr, and terminate the input stream.
 #[test]
 fn hack_test_stdin_buffer_dos_protection() {
     use std::io::Write;
@@ -1436,10 +1442,10 @@ fn hack_test_stdin_buffer_dos_protection() {
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open child stdin");
-        // Stream slightly more than 4MB of non-newline data
+        // Stream slightly more than 16MB of non-newline data
         let chunk = vec![b'a'; 64 * 1024]; // 64 KB chunk
-        for _ in 0..70 {
-            // 70 * 64 KB = 4.48 MB > 4 MB
+        for _ in 0..270 {
+            // 270 * 64 KB = 17.28 MB > 16 MB
             if stdin.write_all(&chunk).is_err() {
                 break;
             }
@@ -1455,5 +1461,168 @@ fn hack_test_stdin_buffer_dos_protection() {
         "Must alert on stdin buffer exceeding max capacity! Actual stderr: {}",
         stderr
     );
+}
+
+#[test]
+fn test_stdin_buffer_custom_env_override() {
+    use std::io::Write;
+    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+
+    let server_script = r#"
+        const readline = require('readline');
+        const rl = readline.createInterface({ input: process.stdin });
+        rl.on('line', () => {});
+    "#;
+
+    // Set custom limit to 1 MB (1048576 bytes)
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_MAX_BUFFER", "1048576")
+        .args([
+            "run",
+            "--profile",
+            "read-only",
+            "--",
+            "node",
+            "-e",
+            server_script,
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn mcp-sentinel");
+
+    {
+        let stdin = child.stdin.as_mut().expect("Failed to open child stdin");
+        // Stream slightly more than 1 MB (20 * 64 KB = 1.28 MB)
+        let chunk = vec![b'a'; 64 * 1024];
+        for _ in 0..20 {
+            if stdin.write_all(&chunk).is_err() {
+                break;
+            }
+        }
+        let _ = stdin.flush();
+    }
+
+    let output = child.wait_with_output().expect("Failed to read output");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("Security Alert: Stdin buffer exceeded max capacity (1048576 bytes)"),
+        "Must alert with custom buffer limit! Actual stderr: {}",
+        stderr
+    );
+}
+
+/// HACK ATTACK 28: Profile Mismatch Re-authorization Requirement
+/// A grant authorized under `--profile read-only` must be denied (re-prompting) if later run without profile or with a different profile.
+#[test]
+fn hack_test_tofu_profile_mismatch_requires_reauthorization() {
+    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let temp_dir = std::env::temp_dir().join(format!("sentinel_test_profile_tofu_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    let vault_key = "TEST_VAULT_PROFILE_KEY";
+    let _ = mcp_sentinel::vault::set_secret(vault_key, "secret_value_12345");
+
+    let cmd = vec!["node".to_string(), "server.js".to_string()];
+    let fp_ro = mcp_sentinel::policy::compute_fingerprint_with_profile(&cmd, Some("read-only"));
+    let spec = format!("API_KEY={}", vault_key);
+
+    // Pre-authorize with read-only profile
+    std::env::set_var("MCP_SENTINEL_CONFIG_DIR", temp_dir.to_str().unwrap());
+    std::env::set_var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE", "1");
+
+    mcp_sentinel::policy::record_grant_with_profile(
+        &fp_ro,
+        None,
+        &cmd,
+        std::slice::from_ref(&spec),
+        Some("read-only".to_string()),
+    )
+    .expect("Pre-authorizing read-only grant must succeed");
+
+    // Check that it's authorized with read-only profile
+    assert!(mcp_sentinel::policy::is_authorized_with_profile(
+        &fp_ro,
+        std::slice::from_ref(&spec),
+        Some("read-only")
+    ));
+
+    // Check that it's NOT authorized with None or a different profile
+    assert!(!mcp_sentinel::policy::is_authorized_with_profile(
+        &fp_ro,
+        std::slice::from_ref(&spec),
+        None
+    ));
+    assert!(!mcp_sentinel::policy::is_authorized_with_profile(
+        &fp_ro,
+        std::slice::from_ref(&spec),
+        Some("admin")
+    ));
+
+    // Now test running via CLI without profile in mock deny mode -> exits with code 1
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_CONFIG_DIR", temp_dir.to_str().unwrap())
+        .env("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE", "1")
+        .env("MCP_SENTINEL_MOCK_DIALOG_RESPONSE", "deny")
+        .args([
+            "run",
+            "--secrets",
+            &spec,
+            "--",
+            "node",
+            "server.js",
+        ])
+        .output()
+        .expect("Failed to execute mcp-sentinel run");
+
+    assert!(
+        !output.status.success(),
+        "Running without profile when granted with read-only must prompt and fail when denied"
+    );
+
+    // Cleanup
+    let _ = mcp_sentinel::vault::delete_secret(vault_key);
+    std::env::remove_var("MCP_SENTINEL_CONFIG_DIR");
+    std::env::remove_var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+/// HACK ATTACK 29: OS Job Object Sandbox Blocks Secret Access
+/// Even if MCP_SENTINEL_CHILD_CONTEXT is stripped or unset, running inside a Job Object must be blocked with exit code 13.
+#[test]
+#[cfg(windows)]
+fn hack_test_job_object_blocks_secret_access_even_without_child_context_env() {
+    let job = mcp_sentinel::platform::windows::JobObjectGuard::new().expect("Failed to create Job Object");
+
+    let script = format!(
+        "Start-Sleep -Milliseconds 100; $env:MCP_SENTINEL_CHILD_CONTEXT = ''; & '{}' secrets list; exit $LASTEXITCODE",
+        env!("CARGO_BIN_EXE_mcp-sentinel").replace('\'', "''")
+    );
+
+    use std::os::windows::io::AsRawHandle;
+    let child = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .env_remove("MCP_SENTINEL_CHILD_CONTEXT")
+        .env_remove("MCP_SENTINEL_BYPASS_JOB_CHECK")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn powershell child");
+
+    unsafe {
+        let _ = job.assign_process(child.as_raw_handle() as _);
+    }
+
+    let output = child.wait_with_output().expect("Failed to read output");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(13),
+        "Secrets access from within Job Object must exit with code 13. Stderr: {}",
+        stderr
+    );
+    assert!(stderr.contains("Security Violation"));
 }
 

@@ -143,6 +143,10 @@ pub enum PermCommands {
         #[arg(short, long, value_delimiter = ',')]
         secrets: Vec<String>,
 
+        /// Optional Tool Policy Profile to bind to this grant
+        #[arg(long)]
+        profile: Option<String>,
+
         /// Command and arguments of the MCP server to pre-authorize
         #[arg(required = true, last = true)]
         cmd: Vec<String>,
@@ -477,6 +481,37 @@ mod tests {
                 action: PermCommands::Reset
             }
         ));
+
+        // Grant with profile
+        let cli = Cli::try_parse_from([
+            "mcp-sentinel",
+            "permissions",
+            "grant",
+            "--profile",
+            "read-only",
+            "--secrets",
+            "SECRET_A",
+            "--",
+            "node",
+            "server.js",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Permissions {
+                action:
+                    PermCommands::Grant {
+                        profile,
+                        secrets,
+                        cmd,
+                        ..
+                    },
+            } => {
+                assert_eq!(profile, Some("read-only".to_string()));
+                assert_eq!(secrets, vec!["SECRET_A".to_string()]);
+                assert_eq!(cmd, vec!["node".to_string(), "server.js".to_string()]);
+            }
+            _ => panic!("Expected PermCommands::Grant"),
+        }
     }
 
     #[test]

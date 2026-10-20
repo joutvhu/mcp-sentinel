@@ -71,6 +71,40 @@ const SAFE_KEYS: &[&str] = &[
     "VIRTUAL_ENV",
 ];
 
+static CURRENT_EXE_DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+
+fn get_current_exe_dir() -> Option<&'static std::path::Path> {
+    CURRENT_EXE_DIR
+        .get_or_init(|| env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())))
+        .as_deref()
+}
+
+/// Sanitizes a PATH-like environment string by removing occurrences of `exe_dir`.
+pub fn sanitize_path(path_val: &str, exe_dir: &std::path::Path) -> std::ffi::OsString {
+    let exe_str = exe_dir.to_string_lossy();
+    #[cfg(windows)]
+    let exe_norm = exe_str.trim_end_matches(['\\', '/']);
+    #[cfg(not(windows))]
+    let exe_norm = exe_str.trim_end_matches('/');
+
+    let filtered_paths: Vec<_> = env::split_paths(path_val)
+        .filter(|p| {
+            let p_str = p.to_string_lossy();
+            #[cfg(windows)]
+            {
+                let p_norm = p_str.trim_end_matches(['\\', '/']);
+                !p_norm.eq_ignore_ascii_case(exe_norm)
+            }
+            #[cfg(not(windows))]
+            {
+                let p_norm = p_str.trim_end_matches('/');
+                p_norm != exe_norm
+            }
+        })
+        .collect();
+    env::join_paths(filtered_paths).unwrap_or_default()
+}
+
 /// Builds a sanitized environment map containing only safe system variables
 /// and explicitly injected secrets. Injects a child security context lock to prevent recursion.
 pub fn build_sanitized_env(secrets_to_inject: &HashMap<String, String>) -> HashMap<String, String> {
@@ -79,6 +113,22 @@ pub fn build_sanitized_env(secrets_to_inject: &HashMap<String, String>) -> HashM
     for &key in SAFE_KEYS {
         if let Ok(val) = env::var(key) {
             clean_env.insert(key.to_string(), val);
+        }
+    }
+
+    // Strip mcp-sentinel executable directory from PATH to prevent direct execution by child processes
+    if let Some(exe_dir) = get_current_exe_dir() {
+        let path_key = clean_env
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case("PATH"))
+            .cloned();
+        if let Some(key) = path_key {
+            if let Some(path_val) = clean_env.get(&key) {
+                let new_path = sanitize_path(path_val, exe_dir);
+                if let Some(s) = new_path.to_str() {
+                    clean_env.insert(key, s.to_string());
+                }
+            }
         }
     }
 
@@ -161,5 +211,22 @@ mod tests {
         );
         assert!(!env_map.contains_key("mcp_sentinel_custom"));
         assert!(!env_map.contains_key("__INTERNAL_KEY"));
+    }
+
+    #[test]
+    fn test_sanitize_path_removes_exe_dir() {
+        let temp_dir = std::env::temp_dir();
+        let dir_a = temp_dir.join("test_sentinel_dir_a");
+        let dir_b = temp_dir.join("test_sentinel_dir_b");
+        let dir_c = temp_dir.join("test_sentinel_dir_c");
+
+        let combined = env::join_paths(vec![&dir_a, &dir_b, &dir_c]).unwrap();
+        let cleaned = sanitize_path(combined.to_str().unwrap(), &dir_b);
+        let split_cleaned: Vec<_> = env::split_paths(&cleaned).collect();
+
+        assert_eq!(split_cleaned.len(), 2);
+        assert!(!split_cleaned.iter().any(|p| p == &dir_b));
+        assert!(split_cleaned.iter().any(|p| p == &dir_a));
+        assert!(split_cleaned.iter().any(|p| p == &dir_c));
     }
 }
