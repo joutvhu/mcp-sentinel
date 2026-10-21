@@ -1,6 +1,8 @@
 use directories::BaseDirs;
 use keyring::Entry;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+#[cfg(any(test, debug_assertions))]
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -206,28 +208,29 @@ pub fn unregister_key(key: &str) {
     });
 }
 
+#[cfg(any(test, debug_assertions))]
 fn is_mock_or_insecure_keyring() -> bool {
-    #[cfg(any(test, debug_assertions))]
-    {
-        if std::env::var("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE").is_ok() {
-            return true;
-        }
+    if std::env::var("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE").is_ok() {
+        return true;
     }
     std::env::var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
 }
 
+#[cfg(any(test, debug_assertions))]
 fn get_mock_vault_file_path() -> Option<PathBuf> {
     let keys_path = get_vault_keys_file_path()?;
     Some(keys_path.with_file_name(".insecure_vault.json"))
 }
 
+#[cfg(any(test, debug_assertions))]
 fn get_mock_vault_lock_path() -> Option<PathBuf> {
     let keys_path = get_vault_keys_file_path()?;
     Some(keys_path.with_file_name(".insecure_vault.json.lock"))
 }
 
+#[cfg(any(test, debug_assertions))]
 fn get_global_mock_vault_file_path() -> Option<PathBuf> {
     let base_dirs = BaseDirs::new()?;
     let config_dir = base_dirs.config_dir().join(SERVICE_NAME);
@@ -235,6 +238,7 @@ fn get_global_mock_vault_file_path() -> Option<PathBuf> {
     Some(config_dir.join(".insecure_vault.json"))
 }
 
+#[cfg(any(test, debug_assertions))]
 fn load_mock_vault(path: &std::path::Path) -> HashMap<String, String> {
     if let Ok(content) = fs::read_to_string(path) {
         if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&content) {
@@ -244,6 +248,7 @@ fn load_mock_vault(path: &std::path::Path) -> HashMap<String, String> {
     HashMap::new()
 }
 
+#[cfg(any(test, debug_assertions))]
 fn save_mock_vault_unlocked(
     path: &std::path::Path,
     map: &HashMap<String, String>,
@@ -253,6 +258,7 @@ fn save_mock_vault_unlocked(
     crate::lock::atomic_write_and_rename(path, json.as_bytes())
 }
 
+#[cfg(any(test, debug_assertions))]
 fn modify_mock_vault<F, R>(op: F) -> Result<R, keyring::Error>
 where
     F: FnOnce(&mut HashMap<String, String>) -> Result<R, keyring::Error>,
@@ -278,6 +284,7 @@ where
     Ok(res)
 }
 
+#[cfg(any(test, debug_assertions))]
 fn write_mock_vault_key(key: &str, value: &str) -> Result<(), keyring::Error> {
     modify_mock_vault(|map| {
         map.insert(key.to_string(), value.to_string());
@@ -299,6 +306,7 @@ fn write_mock_vault_key(key: &str, value: &str) -> Result<(), keyring::Error> {
     Ok(())
 }
 
+#[cfg(any(test, debug_assertions))]
 fn remove_mock_vault_key(key: &str) {
     let _ = modify_mock_vault(|map| {
         map.remove(key);
@@ -326,6 +334,7 @@ pub fn set_secret(key: &str, value: &str) -> Result<(), keyring::Error> {
         }
     }
 
+    #[cfg(any(test, debug_assertions))]
     if is_mock_or_insecure_keyring() {
         write_mock_vault_key(key, value)?;
         register_key(key);
@@ -333,6 +342,7 @@ pub fn set_secret(key: &str, value: &str) -> Result<(), keyring::Error> {
     }
 
     let entry = Entry::new(SERVICE_NAME, key)?;
+    #[cfg(any(test, debug_assertions))]
     match entry.set_password(value) {
         Ok(_) => {
             register_key(key);
@@ -348,9 +358,16 @@ pub fn set_secret(key: &str, value: &str) -> Result<(), keyring::Error> {
             }
         }
     }
+    #[cfg(not(any(test, debug_assertions)))]
+    {
+        entry.set_password(value)?;
+        register_key(key);
+        Ok(())
+    }
 }
 
 pub fn get_secret(key: &str) -> Result<String, keyring::Error> {
+    #[cfg(any(test, debug_assertions))]
     if is_mock_or_insecure_keyring() {
         if let Some(path) = get_mock_vault_file_path() {
             let map = load_mock_vault(&path);
@@ -368,6 +385,7 @@ pub fn get_secret(key: &str) -> Result<String, keyring::Error> {
     }
 
     let entry = Entry::new(SERVICE_NAME, key)?;
+    #[cfg(any(test, debug_assertions))]
     match entry.get_password() {
         Ok(val) => Ok(val),
         Err(e) => {
@@ -388,9 +406,12 @@ pub fn get_secret(key: &str) -> Result<String, keyring::Error> {
             Err(e)
         }
     }
+    #[cfg(not(any(test, debug_assertions)))]
+    entry.get_password()
 }
 
 pub fn delete_secret(key: &str) -> Result<(), keyring::Error> {
+    #[cfg(any(test, debug_assertions))]
     if is_mock_or_insecure_keyring() {
         remove_mock_vault_key(key);
         unregister_key(key);
@@ -398,6 +419,7 @@ pub fn delete_secret(key: &str) -> Result<(), keyring::Error> {
     }
 
     let entry = Entry::new(SERVICE_NAME, key)?;
+    #[cfg(any(test, debug_assertions))]
     match entry.delete_credential() {
         Ok(_) => {}
         Err(keyring::Error::NoEntry) => {
@@ -412,6 +434,15 @@ pub fn delete_secret(key: &str) -> Result<(), keyring::Error> {
             return Err(e);
         }
     }
+    #[cfg(not(any(test, debug_assertions)))]
+    match entry.delete_credential() {
+        Ok(_) => {}
+        Err(keyring::Error::NoEntry) => {
+            // Secret already removed from OS Keyring; proceed to unregister from registry
+        }
+        Err(e) => return Err(e),
+    }
+
     unregister_key(key);
     Ok(())
 }
