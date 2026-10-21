@@ -23,10 +23,7 @@ fn check_single_tool_request(
     audit_enabled: bool,
     server_name: &str,
 ) -> Option<serde_json::Value> {
-    let method = match req.get("method").and_then(|m| m.as_str()) {
-        Some(m) => m.trim(),
-        None => return None,
-    };
+    let method = req.get("method")?.as_str()?.trim();
     if !method.eq_ignore_ascii_case("tools/call") {
         return None;
     }
@@ -397,7 +394,8 @@ pub async fn run_child_and_pipe(
 
                                     if !has_blocked {
                                         // Fast-path: all items allowed, forward raw slice directly!
-                                        if child_stdin.write_all(&in_buf[..consumed]).await.is_err() {
+                                        if child_stdin.write_all(&in_buf[..consumed]).await.is_err()
+                                        {
                                             return;
                                         }
                                         if child_stdin.write_all(b"\n").await.is_err() {
@@ -413,7 +411,8 @@ pub async fn run_child_and_pipe(
                                         let val = serde_json::Value::Array(allowed_requests);
                                         let mut payload = val.to_string();
                                         payload.push('\n');
-                                        if child_stdin.write_all(payload.as_bytes()).await.is_err() {
+                                        if child_stdin.write_all(payload.as_bytes()).await.is_err()
+                                        {
                                             return;
                                         }
                                         if child_stdin.flush().await.is_err() {

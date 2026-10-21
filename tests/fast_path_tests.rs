@@ -159,7 +159,11 @@ fn test_mixed_batch_filters_blocked_and_reserializes_allowed() {
 
     // 3. Child process NEVER receives drop_table
     assert!(
-        !stdout.contains("RECEIVED:") || !stdout.split("RECEIVED:").skip(1).any(|chunk| chunk.contains("drop_table")),
+        !stdout.contains("RECEIVED:")
+            || !stdout
+                .split("RECEIVED:")
+                .skip(1)
+                .any(|chunk| chunk.contains("drop_table")),
         "Child process must NEVER receive blocked drop_table call: {}",
         stdout
     );

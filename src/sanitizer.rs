@@ -71,11 +71,16 @@ const SAFE_KEYS: &[&str] = &[
     "VIRTUAL_ENV",
 ];
 
-static CURRENT_EXE_DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+static CURRENT_EXE_DIR: std::sync::OnceLock<Option<std::path::PathBuf>> =
+    std::sync::OnceLock::new();
 
 fn get_current_exe_dir() -> Option<&'static std::path::Path> {
     CURRENT_EXE_DIR
-        .get_or_init(|| env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())))
+        .get_or_init(|| {
+            env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        })
         .as_deref()
 }
 
@@ -117,7 +122,10 @@ pub fn sanitize_path(path_val: &str, exe_dir: &std::path::Path) -> std::ffi::OsS
 
     let exe_str = exe_dir.to_string_lossy();
     #[cfg(windows)]
-    let exe_norm = exe_str.replace('/', "\\").trim_end_matches(['\\', '/']).to_lowercase();
+    let exe_norm = exe_str
+        .replace('/', "\\")
+        .trim_end_matches(['\\', '/'])
+        .to_lowercase();
     #[cfg(not(windows))]
     let exe_norm = exe_str.trim_end_matches('/').to_string();
 
@@ -129,7 +137,10 @@ pub fn sanitize_path(path_val: &str, exe_dir: &std::path::Path) -> std::ffi::OsS
             let p_str = p.to_string_lossy();
             #[cfg(windows)]
             {
-                let p_norm = p_str.replace('/', "\\").trim_end_matches(['\\', '/']).to_lowercase();
+                let p_norm = p_str
+                    .replace('/', "\\")
+                    .trim_end_matches(['\\', '/'])
+                    .to_lowercase();
                 p_norm != exe_norm
             }
             #[cfg(not(windows))]
@@ -405,7 +416,7 @@ mod tests {
         let dir_b = std::path::Path::new("C:\\tools\\dedicated_sentinel\\bin");
         let safe_dir = std::path::Path::new("C:\\tools\\other_app\\bin");
 
-        let combined = format!("C:/tools/dedicated_sentinel/bin;C:\\tools\\other_app\\bin");
+        let combined = "C:/tools/dedicated_sentinel/bin;C:\\tools\\other_app\\bin".to_string();
         let cleaned = sanitize_path(&combined, dir_b);
         let split_cleaned: Vec<_> = env::split_paths(&cleaned).collect();
 

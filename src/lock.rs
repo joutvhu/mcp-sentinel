@@ -32,14 +32,17 @@ impl FileLock {
     /// Retries for up to 5 seconds with exponential backoff.
     pub fn acquire(lock_path: &Path) -> Result<Self, String> {
         let norm_path = normalize_path(lock_path);
-        let (lock, cvar) = LOCK_MANAGER.get_or_init(|| (Mutex::new(HashSet::new()), Condvar::new()));
+        let (lock, cvar) =
+            LOCK_MANAGER.get_or_init(|| (Mutex::new(HashSet::new()), Condvar::new()));
 
         let start = Instant::now();
         let timeout = Duration::from_secs(5);
 
         // 1. Acquire in-process lock
         {
-            let mut set = lock.lock().map_err(|e| format!("Lock manager mutex poisoned: {}", e))?;
+            let mut set = lock
+                .lock()
+                .map_err(|e| format!("Lock manager mutex poisoned: {}", e))?;
             loop {
                 if !set.contains(&norm_path) {
                     set.insert(norm_path.clone());
@@ -153,11 +156,19 @@ impl Drop for FileLock {
 pub fn atomic_write_and_rename(target_path: &Path, content: &[u8]) -> Result<(), String> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-    let parent = target_path
-        .parent()
-        .ok_or_else(|| format!("Invalid target path with no parent: {}", target_path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|e| format!("Failed to create parent directory {}: {}", parent.display(), e))?;
+    let parent = target_path.parent().ok_or_else(|| {
+        format!(
+            "Invalid target path with no parent: {}",
+            target_path.display()
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(|e| {
+        format!(
+            "Failed to create parent directory {}: {}",
+            parent.display(),
+            e
+        )
+    })?;
 
     let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
@@ -168,8 +179,13 @@ pub fn atomic_write_and_rename(target_path: &Path, content: &[u8]) -> Result<(),
     let tmp_path = parent.join(format!(".{}.{}_{}.tmp", file_name, pid, counter));
 
     // Write content to temporary file
-    fs::write(&tmp_path, content)
-        .map_err(|e| format!("Failed to write temporary file {}: {}", tmp_path.display(), e))?;
+    fs::write(&tmp_path, content).map_err(|e| {
+        format!(
+            "Failed to write temporary file {}: {}",
+            tmp_path.display(),
+            e
+        )
+    })?;
 
     // Layer 1: Restrict permissions to 0600 on Unix (owner read/write only)
     #[cfg(unix)]
@@ -222,7 +238,8 @@ mod tests {
         let path_clone = lock_path.clone();
 
         let handle = thread::spawn(move || {
-            let _lock2 = FileLock::acquire(&path_clone).expect("Second lock should succeed after lock1 drops");
+            let _lock2 = FileLock::acquire(&path_clone)
+                .expect("Second lock should succeed after lock1 drops");
             let mut v = val_clone.lock().unwrap();
             *v = 42;
         });

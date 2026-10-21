@@ -96,7 +96,8 @@ pub fn ask_user_permission(
     // Immediately return Deny instead of hanging for 30s timeout.
     if is_ssh_session() {
         #[cfg(target_os = "linux")]
-        let has_display = std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
+        let has_display =
+            std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
         #[cfg(not(target_os = "linux"))]
         let has_display = false;
 

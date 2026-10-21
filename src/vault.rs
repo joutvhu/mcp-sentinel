@@ -167,7 +167,10 @@ pub fn parse_specs(specs: &[String]) -> Result<Vec<SecretMapping>, String> {
     Ok(mappings)
 }
 
-pub fn save_vault_keys_unlocked(path: &std::path::Path, keys: &BTreeSet<String>) -> Result<(), String> {
+pub fn save_vault_keys_unlocked(
+    path: &std::path::Path,
+    keys: &BTreeSet<String>,
+) -> Result<(), String> {
     let json = serde_json::to_string_pretty(keys)
         .map_err(|e| format!("Failed to serialize vault keys: {}", e))?;
     crate::lock::atomic_write_and_rename(path, json.as_bytes())
@@ -251,7 +254,10 @@ mod tests {
 
                 // Idempotent deletion: deleting an already deleted/missing key must succeed and not error
                 let res_del_again = delete_secret(&key);
-                assert!(res_del_again.is_ok(), "Deleting non-existent secret must be idempotent");
+                assert!(
+                    res_del_again.is_ok(),
+                    "Deleting non-existent secret must be idempotent"
+                );
             }
             Err(e) => {
                 eprintln!(
@@ -275,8 +281,16 @@ mod tests {
 
         // Dangerous runtime control variables (RISK-02)
         for &var in DANGEROUS_RUNTIME_VARS {
-            assert!(validate_key_name(var).is_err(), "Expected {} to be rejected", var);
-            assert!(validate_key_name(&var.to_lowercase()).is_err(), "Expected lowercase {} to be rejected", var);
+            assert!(
+                validate_key_name(var).is_err(),
+                "Expected {} to be rejected",
+                var
+            );
+            assert!(
+                validate_key_name(&var.to_lowercase()).is_err(),
+                "Expected lowercase {} to be rejected",
+                var
+            );
         }
 
         // Invalid characters

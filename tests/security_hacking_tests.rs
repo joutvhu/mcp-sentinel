@@ -1399,7 +1399,9 @@ fn hack_test_jsonrpc_stream_framing_integrity_on_interleaved_synthetic_error() {
     }
 
     // Specifically verify the reconstructed child line
-    let child_line = lines.iter().find(|l| l.contains("\"id\":100") || l.contains("\"id\": 100"));
+    let child_line = lines
+        .iter()
+        .find(|l| l.contains("\"id\":100") || l.contains("\"id\": 100"));
     assert!(
         child_line.is_some(),
         "Reconstructed child message must be present intact! Output: {}",
@@ -1519,7 +1521,8 @@ fn test_stdin_buffer_custom_env_override() {
 #[test]
 fn hack_test_tofu_profile_mismatch_requires_reauthorization() {
     let _lock = POLICY_TEST_LOCK.lock().unwrap();
-    let temp_dir = std::env::temp_dir().join(format!("sentinel_test_profile_tofu_{}", std::process::id()));
+    let temp_dir =
+        std::env::temp_dir().join(format!("sentinel_test_profile_tofu_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&temp_dir);
 
     let vault_key = "TEST_VAULT_PROFILE_KEY";
@@ -1566,14 +1569,7 @@ fn hack_test_tofu_profile_mismatch_requires_reauthorization() {
         .env("MCP_SENTINEL_CONFIG_DIR", temp_dir.to_str().unwrap())
         .env("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE", "1")
         .env("MCP_SENTINEL_MOCK_DIALOG_RESPONSE", "deny")
-        .args([
-            "run",
-            "--secrets",
-            &spec,
-            "--",
-            "node",
-            "server.js",
-        ])
+        .args(["run", "--secrets", &spec, "--", "node", "server.js"])
         .output()
         .expect("Failed to execute mcp-sentinel run");
 
@@ -1596,7 +1592,8 @@ fn hack_test_tofu_profile_mismatch_requires_reauthorization() {
 #[test]
 #[cfg(windows)]
 fn hack_test_job_object_blocks_secret_access_even_without_child_context_env() {
-    let job = mcp_sentinel::platform::windows::JobObjectGuard::new().expect("Failed to create Job Object");
+    let job = mcp_sentinel::platform::windows::JobObjectGuard::new()
+        .expect("Failed to create Job Object");
 
     use std::os::windows::io::AsRawHandle;
 
@@ -1619,7 +1616,9 @@ fn hack_test_job_object_blocks_secret_access_even_without_child_context_env() {
         let _ = job.assign_process(child_no_env.as_raw_handle() as _);
     }
 
-    let output_no_env = child_no_env.wait_with_output().expect("Failed to read output");
+    let output_no_env = child_no_env
+        .wait_with_output()
+        .expect("Failed to read output");
     let stderr_no_env = String::from_utf8_lossy(&output_no_env.stderr);
     assert_eq!(
         output_no_env.status.code(),
@@ -1646,7 +1645,9 @@ fn hack_test_job_object_blocks_secret_access_even_without_child_context_env() {
         let _ = job.assign_process(child_bypass.as_raw_handle() as _);
     }
 
-    let output_bypass = child_bypass.wait_with_output().expect("Failed to read output");
+    let output_bypass = child_bypass
+        .wait_with_output()
+        .expect("Failed to read output");
     let stderr_bypass = String::from_utf8_lossy(&output_bypass.stderr);
     assert_ne!(
         output_bypass.status.code(),
@@ -1823,5 +1824,3 @@ fn hack_test_dangerous_runtime_control_variables_blocked() {
     assert!(stdout_pass.contains("NODE_OPTIONS=undefined"));
     assert!(stdout_pass.contains("PYTHONPATH=undefined"));
 }
-
-

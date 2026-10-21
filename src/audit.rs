@@ -118,10 +118,7 @@ fn rotate_if_needed(path: &PathBuf) -> Result<(), String> {
                 // Safe fallback for Windows sharing violations or cross-device links:
                 // Attempt copy and truncate; if even that fails, ignore so proxy flow is not blocked.
                 if fs::copy(path, &backup_path).is_ok() {
-                    let _ = OpenOptions::new()
-                        .write(true)
-                        .truncate(true)
-                        .open(path);
+                    let _ = OpenOptions::new().write(true).truncate(true).open(path);
                 }
             }
         }

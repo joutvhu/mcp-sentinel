@@ -75,8 +75,11 @@ async fn main() {
             let fingerprint = policy::compute_fingerprint_with_profile(&cmd, profile.as_deref());
 
             // 1. TOFU Authorization check
-            let is_pre_authorized =
-                policy::is_authorized_with_profile(&fingerprint, &canonical_specs, profile.as_deref());
+            let is_pre_authorized = policy::is_authorized_with_profile(
+                &fingerprint,
+                &canonical_specs,
+                profile.as_deref(),
+            );
             if !mappings.is_empty() && !is_pre_authorized {
                 eprintln!(
                     "[mcp-sentinel] Requesting user permission for '{}' (Fingerprint: {})...",
@@ -322,57 +325,58 @@ async fn main() {
             }
 
             match action {
-            SecretCommands::Set { key, value } => {
-                if let Err(msg) = vault::validate_key_name(&key) {
-                    eprintln!("Error: {}", msg);
-                    exit(1);
-                }
-                match vault::set_secret(&key, &value) {
-                    Ok(_) => println!("Secret '{}' successfully stored in OS Keyring.", key),
-                    Err(e) => {
-                        eprintln!("Error saving secret '{}': {}", key, e);
+                SecretCommands::Set { key, value } => {
+                    if let Err(msg) = vault::validate_key_name(&key) {
+                        eprintln!("Error: {}", msg);
                         exit(1);
                     }
+                    match vault::set_secret(&key, &value) {
+                        Ok(_) => println!("Secret '{}' successfully stored in OS Keyring.", key),
+                        Err(e) => {
+                            eprintln!("Error saving secret '{}': {}", key, e);
+                            exit(1);
+                        }
+                    }
                 }
-            }
-            SecretCommands::Get { key } => {
-                if let Err(msg) = vault::validate_key_name(&key) {
-                    eprintln!("Error: {}", msg);
-                    exit(1);
-                }
-                match vault::get_secret(&key) {
-                    Ok(val) => println!("{}", val),
-                    Err(e) => {
-                        eprintln!("Error reading secret '{}': {}", key, e);
+                SecretCommands::Get { key } => {
+                    if let Err(msg) = vault::validate_key_name(&key) {
+                        eprintln!("Error: {}", msg);
                         exit(1);
                     }
+                    match vault::get_secret(&key) {
+                        Ok(val) => println!("{}", val),
+                        Err(e) => {
+                            eprintln!("Error reading secret '{}': {}", key, e);
+                            exit(1);
+                        }
+                    }
                 }
-            }
-            SecretCommands::Delete { key } => {
-                if let Err(msg) = vault::validate_key_name(&key) {
-                    eprintln!("Error: {}", msg);
-                    exit(1);
-                }
-                match vault::delete_secret(&key) {
-                    Ok(_) => println!("Secret '{}' removed from OS Keyring.", key),
-                    Err(e) => {
-                        eprintln!("Error deleting secret '{}': {}", key, e);
+                SecretCommands::Delete { key } => {
+                    if let Err(msg) = vault::validate_key_name(&key) {
+                        eprintln!("Error: {}", msg);
                         exit(1);
                     }
+                    match vault::delete_secret(&key) {
+                        Ok(_) => println!("Secret '{}' removed from OS Keyring.", key),
+                        Err(e) => {
+                            eprintln!("Error deleting secret '{}': {}", key, e);
+                            exit(1);
+                        }
+                    }
                 }
-            }
-            SecretCommands::List => {
-                let keys = vault::list_keys();
-                if keys.is_empty() {
-                    println!("No secrets stored in OS Keyring.");
-                } else {
-                    println!("Stored secret keys in OS Keyring ({}):", keys.len());
-                    for key in keys {
-                        println!("  - {}", key);
+                SecretCommands::List => {
+                    let keys = vault::list_keys();
+                    if keys.is_empty() {
+                        println!("No secrets stored in OS Keyring.");
+                    } else {
+                        println!("Stored secret keys in OS Keyring ({}):", keys.len());
+                        for key in keys {
+                            println!("  - {}", key);
+                        }
                     }
                 }
             }
-        }},
+        }
 
         Commands::Permissions { action } => match action {
             PermCommands::List => {
@@ -804,7 +808,10 @@ async fn main() {
 /// Terminate all running mcp-sentinel processes (excluding the current process)
 fn kill_running_sentinel_processes(force: bool) {
     let current_pid = std::process::id();
-    println!("🔍 Searching for running mcp-sentinel processes (current PID: {})...", current_pid);
+    println!(
+        "🔍 Searching for running mcp-sentinel processes (current PID: {})...",
+        current_pid
+    );
 
     #[cfg(windows)]
     {
@@ -841,7 +848,10 @@ fn kill_running_sentinel_processes(force: bool) {
             return;
         }
 
-        println!("Terminating {} running mcp-sentinel process(es)...", target_pids.len());
+        println!(
+            "Terminating {} running mcp-sentinel process(es)...",
+            target_pids.len()
+        );
         for pid in target_pids {
             let mut cmd = Command::new("taskkill");
             if force {
@@ -899,7 +909,10 @@ fn kill_running_sentinel_processes(force: bool) {
             return;
         }
 
-        println!("Terminating {} running mcp-sentinel process(es)...", target_pids.len());
+        println!(
+            "Terminating {} running mcp-sentinel process(es)...",
+            target_pids.len()
+        );
         let sig = if force { "-9" } else { "-15" };
 
         for pid in target_pids {

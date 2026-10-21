@@ -493,7 +493,10 @@ mod tests {
         assert!(err_msg.contains("OS Keyring is unavailable and disk keyfile fallback is disabled"));
 
         // If allow insecure keyfile is set, it succeeds using fallback file in config dir
-        let temp_dir = std::env::temp_dir().join(format!("sentinel_test_policy_keyfile_{}", std::process::id()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "sentinel_test_policy_keyfile_{}",
+            std::process::id()
+        ));
         let _ = fs::create_dir_all(&temp_dir);
         std::env::set_var("MCP_SENTINEL_CONFIG_DIR", temp_dir.to_str().unwrap());
         std::env::set_var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE", "1");
@@ -544,7 +547,11 @@ mod tests {
         assert!(rec.is_ok());
 
         // Authorized with same profile
-        assert!(is_authorized_with_profile(&fp_ro, &secrets, Some("read-only")));
+        assert!(is_authorized_with_profile(
+            &fp_ro,
+            &secrets,
+            Some("read-only")
+        ));
 
         // Unauthorized if no profile or different profile requested
         assert!(!is_authorized_with_profile(&fp_ro, &secrets, None));

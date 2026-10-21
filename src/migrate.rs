@@ -393,10 +393,32 @@ pub fn is_non_secret_config_key(key: &str) -> bool {
     ];
 
     const CONFIG_EXACT: &[&str] = &[
-        "URL", "URI", "ENDPOINT", "PATH", "DIR", "DIRECTORY", "FOLDER", "FILE",
-        "HOST", "HOSTNAME", "PORT", "REGION", "ZONE", "NAME", "LEVEL", "MODE",
-        "ENV", "ENVIRONMENT", "STAGE", "DEBUG", "VERBOSE", "TIMEOUT", "VERSION",
-        "NO_PROXY", "HTTP_PROXY", "HTTPS_PROXY",
+        "URL",
+        "URI",
+        "ENDPOINT",
+        "PATH",
+        "DIR",
+        "DIRECTORY",
+        "FOLDER",
+        "FILE",
+        "HOST",
+        "HOSTNAME",
+        "PORT",
+        "REGION",
+        "ZONE",
+        "NAME",
+        "LEVEL",
+        "MODE",
+        "ENV",
+        "ENVIRONMENT",
+        "STAGE",
+        "DEBUG",
+        "VERBOSE",
+        "TIMEOUT",
+        "VERSION",
+        "NO_PROXY",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
     ];
 
     if CONFIG_EXACT.contains(&upper.as_str()) {
@@ -681,15 +703,19 @@ pub fn migrate_file(
                     .truncate(true)
                     .mode(0o600)
                     .open(&bak)
-                    .map_err(|e| format!("Failed to create backup file '{}': {}", bak.display(), e))?;
-                file.write_all(content.as_bytes())
-                    .map_err(|e| format!("Failed to write backup file '{}': {}", bak.display(), e))?;
+                    .map_err(|e| {
+                        format!("Failed to create backup file '{}': {}", bak.display(), e)
+                    })?;
+                file.write_all(content.as_bytes()).map_err(|e| {
+                    format!("Failed to write backup file '{}': {}", bak.display(), e)
+                })?;
                 let _ = fs::set_permissions(&bak, fs::Permissions::from_mode(0o600));
             }
             #[cfg(not(unix))]
             {
-                fs::write(&bak, &content)
-                    .map_err(|e| format!("Failed to create backup file '{}': {}", bak.display(), e))?;
+                fs::write(&bak, &content).map_err(|e| {
+                    format!("Failed to create backup file '{}': {}", bak.display(), e)
+                })?;
             }
             eprintln!(
                 "[mcp-sentinel] Security Warning: Backup configuration file '{}' contains plaintext secrets! Please inspect and securely delete it once verified.",
@@ -915,7 +941,11 @@ mod tests {
 
         let cleaned = clean_jsonc(jsonc);
         let parsed: Result<Value, _> = serde_json::from_str(&cleaned);
-        assert!(parsed.is_ok(), "Failed to parse cleaned JSONC: {:?}", parsed.err());
+        assert!(
+            parsed.is_ok(),
+            "Failed to parse cleaned JSONC: {:?}",
+            parsed.err()
+        );
 
         let val = parsed.unwrap();
         assert_eq!(
@@ -1014,7 +1044,10 @@ mod tests {
         assert!(is_likely_secret("DB_PASSWORD", "secret_pass"));
         assert!(is_likely_secret("CUSTOM_PARAM", "${env:MY_SECRET}"));
 
-        assert!(!is_likely_secret("GITHUB_API_URL", "https://api.github.com"));
+        assert!(!is_likely_secret(
+            "GITHUB_API_URL",
+            "https://api.github.com"
+        ));
         assert!(!is_likely_secret("WORKSPACE_PATH", "/home/user/project"));
         assert!(!is_likely_secret("LOG_LEVEL", "debug"));
         assert!(!is_likely_secret("GITHUB_API_URL", "${env:GITHUB_API_URL}"));
@@ -1046,12 +1079,24 @@ mod tests {
 
         // Exactly 3 secrets should be extracted
         assert_eq!(results[0].extracted_secrets.len(), 3);
-        assert!(results[0].extracted_secrets.contains(&"GITHUB_TOKEN".to_string()));
-        assert!(results[0].extracted_secrets.contains(&"OPENAI_API_KEY".to_string()));
-        assert!(results[0].extracted_secrets.contains(&"DB_PASSWORD".to_string()));
-        assert!(!results[0].extracted_secrets.contains(&"GITHUB_API_URL".to_string()));
-        assert!(!results[0].extracted_secrets.contains(&"WORKSPACE_PATH".to_string()));
-        assert!(!results[0].extracted_secrets.contains(&"LOG_LEVEL".to_string()));
+        assert!(results[0]
+            .extracted_secrets
+            .contains(&"GITHUB_TOKEN".to_string()));
+        assert!(results[0]
+            .extracted_secrets
+            .contains(&"OPENAI_API_KEY".to_string()));
+        assert!(results[0]
+            .extracted_secrets
+            .contains(&"DB_PASSWORD".to_string()));
+        assert!(!results[0]
+            .extracted_secrets
+            .contains(&"GITHUB_API_URL".to_string()));
+        assert!(!results[0]
+            .extracted_secrets
+            .contains(&"WORKSPACE_PATH".to_string()));
+        assert!(!results[0]
+            .extracted_secrets
+            .contains(&"LOG_LEVEL".to_string()));
 
         let parsed: Value = serde_json::from_str(&output_json).unwrap();
         let server = &parsed["mcpServers"]["mixed_server"];
@@ -1106,7 +1151,10 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].server_name, "config_only_server");
         assert_eq!(results[0].extracted_secrets.len(), 0);
-        assert_eq!(results[0].status, "Isolated with mcp-sentinel (no secrets required)");
+        assert_eq!(
+            results[0].status,
+            "Isolated with mcp-sentinel (no secrets required)"
+        );
 
         let parsed: Value = serde_json::from_str(&output_json).unwrap();
         let server = &parsed["mcpServers"]["config_only_server"];
@@ -1128,7 +1176,10 @@ mod tests {
         // --pass-env flag SHOULD be present in args with sorted keys
         let pass_env_idx = args.iter().position(|a| a == "--pass-env").unwrap();
         let pass_env_val = args[pass_env_idx + 1].as_str().unwrap();
-        assert_eq!(pass_env_val, "AWS_REGION,GITHUB_API_URL,LOG_LEVEL,WORKSPACE_DIR");
+        assert_eq!(
+            pass_env_val,
+            "AWS_REGION,GITHUB_API_URL,LOG_LEVEL,WORKSPACE_DIR"
+        );
     }
 
     #[test]

@@ -9,7 +9,8 @@ use std::thread;
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn setup_temp_config_dir(prefix: &str) -> PathBuf {
-    let temp_dir = std::env::temp_dir().join(format!("{}_{}_{}", prefix, std::process::id(), fastrand()));
+    let temp_dir =
+        std::env::temp_dir().join(format!("{}_{}_{}", prefix, std::process::id(), fastrand()));
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).expect("Failed to create temp config dir");
     std::env::set_var("MCP_SENTINEL_CONFIG_DIR", &temp_dir);
@@ -44,7 +45,8 @@ fn test_concurrent_policy_record_grant() {
 
         handles.push(thread::spawn(move || {
             let secret = format!("SECRET_{:02}", i);
-            if let Err(e) = record_grant(&fp_clone, Some("test".to_string()), &cmd_clone, &[secret]) {
+            if let Err(e) = record_grant(&fp_clone, Some("test".to_string()), &cmd_clone, &[secret])
+            {
                 errs.lock().unwrap().push(e);
             }
         }));
@@ -180,16 +182,16 @@ fn test_concurrent_tool_policy_initialization() {
 
     for _ in 0..num_threads {
         let errs = errors.clone();
-        handles.push(thread::spawn(move || {
-            match tool_policy::load_profiles() {
-                Ok(file) => {
-                    if !file.profiles.contains_key("read-only") {
-                        errs.lock().unwrap().push("Missing read-only profile".to_string());
-                    }
+        handles.push(thread::spawn(move || match tool_policy::load_profiles() {
+            Ok(file) => {
+                if !file.profiles.contains_key("read-only") {
+                    errs.lock()
+                        .unwrap()
+                        .push("Missing read-only profile".to_string());
                 }
-                Err(e) => {
-                    errs.lock().unwrap().push(e);
-                }
+            }
+            Err(e) => {
+                errs.lock().unwrap().push(e);
             }
         }));
     }
@@ -205,7 +207,10 @@ fn test_concurrent_tool_policy_initialization() {
     );
 
     let p = tool_policy::get_tool_policies_file_path().unwrap();
-    assert!(p.exists(), "tool_policies.json must exist after initialization");
+    assert!(
+        p.exists(),
+        "tool_policies.json must exist after initialization"
+    );
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
@@ -250,7 +255,8 @@ fn test_concurrent_audit_logging() {
         *errors.lock().unwrap()
     );
 
-    let entries = mcp_sentinel::audit::read_entries(100, None, false).expect("Must read audit entries");
+    let entries =
+        mcp_sentinel::audit::read_entries(100, None, false).expect("Must read audit entries");
     assert_eq!(
         entries.len(),
         num_threads,

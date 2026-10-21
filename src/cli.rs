@@ -286,7 +286,11 @@ mod tests {
             Commands::Run { pass_env, .. } => {
                 assert_eq!(
                     pass_env,
-                    vec!["PORT".to_string(), "DB_NAME".to_string(), "DEBUG".to_string()]
+                    vec![
+                        "PORT".to_string(),
+                        "DB_NAME".to_string(),
+                        "DEBUG".to_string()
+                    ]
                 );
             }
             _ => panic!("Expected Commands::Run"),
@@ -302,7 +306,8 @@ mod tests {
             "node",
             "server.js",
         ];
-        let cli_alias = Cli::try_parse_from(args_alias).expect("CLI should parse --env alias successfully");
+        let cli_alias =
+            Cli::try_parse_from(args_alias).expect("CLI should parse --env alias successfully");
         match cli_alias.command {
             Commands::Run { pass_env, .. } => {
                 assert_eq!(pass_env, vec!["HOST".to_string(), "PORT".to_string()]);
