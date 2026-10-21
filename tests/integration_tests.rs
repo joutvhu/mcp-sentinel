@@ -49,17 +49,28 @@ fn test_cli_version_flag() {
 
 #[test]
 fn test_cli_run_pass_env() {
+    let (cmd, args) = if which::which("node").is_ok() {
+        (
+            "node",
+            vec![
+                "-e",
+                "console.log('PORT:' + process.env.SENTINEL_INTEG_TEST_PORT);",
+            ],
+        )
+    } else {
+        (
+            "python3",
+            vec![
+                "-c",
+                "import os; print('PORT:' + os.environ.get('SENTINEL_INTEG_TEST_PORT', ''))",
+            ],
+        )
+    };
+
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
         .env("SENTINEL_INTEG_TEST_PORT", "4000")
-        .args([
-            "run",
-            "--pass-env",
-            "SENTINEL_INTEG_TEST_PORT",
-            "--",
-            "node",
-            "-e",
-            "console.log('PORT:' + process.env.SENTINEL_INTEG_TEST_PORT);",
-        ])
+        .args(["run", "--pass-env", "SENTINEL_INTEG_TEST_PORT", "--", cmd])
+        .args(&args)
         .output()
         .expect("Failed to execute mcp-sentinel run with --pass-env");
 
@@ -145,6 +156,10 @@ fn test_cli_migrate_file_end_to_end() {
 
     // 1. Dry run
     let output_dry = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_CONFIG_DIR", &temp_dir)
+        .env("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE", "1")
+        .env("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE", "1")
+        .env("MCP_SENTINEL_NON_INTERACTIVE", "1")
         .args([
             "migrate",
             "--file",
@@ -165,6 +180,10 @@ fn test_cli_migrate_file_end_to_end() {
 
     // 2. Real migration
     let output_real = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_CONFIG_DIR", &temp_dir)
+        .env("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE", "1")
+        .env("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE", "1")
+        .env("MCP_SENTINEL_NON_INTERACTIVE", "1")
         .args(["migrate", "--file", config_file.to_str().unwrap()])
         .output()
         .expect("Failed to run migrate");
@@ -205,6 +224,5 @@ fn test_cli_migrate_file_end_to_end() {
     // Clean up
     let _ = fs::remove_file(&config_file);
     let _ = fs::remove_file(&backup_file);
-    let _ = fs::remove_dir(&temp_dir);
-    let _ = mcp_sentinel::vault::delete_secret("SQLITE_DB_KEY");
+    let _ = fs::remove_dir_all(&temp_dir);
 }

@@ -1,6 +1,6 @@
 use directories::BaseDirs;
 use keyring::Entry;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::PathBuf;
 
@@ -206,31 +206,163 @@ pub fn unregister_key(key: &str) {
     });
 }
 
+pub fn is_mock_or_insecure_keyring() -> bool {
+    #[cfg(any(test, debug_assertions))]
+    {
+        if std::env::var("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE").is_ok() {
+            return true;
+        }
+    }
+    std::env::var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+pub fn get_mock_vault_file_path() -> Option<PathBuf> {
+    let keys_path = get_vault_keys_file_path()?;
+    Some(keys_path.with_file_name(".insecure_vault.json"))
+}
+
+pub fn get_mock_vault_lock_path() -> Option<PathBuf> {
+    let keys_path = get_vault_keys_file_path()?;
+    Some(keys_path.with_file_name(".insecure_vault.json.lock"))
+}
+
+fn load_mock_vault(path: &std::path::Path) -> HashMap<String, String> {
+    if let Ok(content) = fs::read_to_string(path) {
+        if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&content) {
+            return map;
+        }
+    }
+    HashMap::new()
+}
+
+fn save_mock_vault_unlocked(
+    path: &std::path::Path,
+    map: &HashMap<String, String>,
+) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(map)
+        .map_err(|e| format!("Failed to serialize mock vault: {}", e))?;
+    crate::lock::atomic_write_and_rename(path, json.as_bytes())
+}
+
+fn modify_mock_vault<F, R>(op: F) -> Result<R, keyring::Error>
+where
+    F: FnOnce(&mut HashMap<String, String>) -> Result<R, keyring::Error>,
+{
+    let path = get_mock_vault_file_path().ok_or_else(|| {
+        keyring::Error::PlatformFailure(Box::new(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Cannot determine mock vault file path",
+        )))
+    })?;
+    let lock_path = get_mock_vault_lock_path().ok_or_else(|| {
+        keyring::Error::PlatformFailure(Box::new(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Cannot determine mock vault lock path",
+        )))
+    })?;
+    let _lock = crate::lock::FileLock::acquire(&lock_path)
+        .map_err(|e| keyring::Error::PlatformFailure(Box::new(std::io::Error::other(e))))?;
+    let mut map = load_mock_vault(&path);
+    let res = op(&mut map)?;
+    save_mock_vault_unlocked(&path, &map)
+        .map_err(|e| keyring::Error::PlatformFailure(Box::new(std::io::Error::other(e))))?;
+    Ok(res)
+}
+
 pub fn set_secret(key: &str, value: &str) -> Result<(), keyring::Error> {
     if !key.starts_with("__") {
         if let Err(msg) = validate_key_name(key) {
             return Err(keyring::Error::Invalid(key.to_string(), msg));
         }
     }
+
+    if is_mock_or_insecure_keyring() {
+        modify_mock_vault(|map| {
+            map.insert(key.to_string(), value.to_string());
+            Ok(())
+        })?;
+        register_key(key);
+        return Ok(());
+    }
+
     let entry = Entry::new(SERVICE_NAME, key)?;
-    entry.set_password(value)?;
-    register_key(key);
-    Ok(())
+    match entry.set_password(value) {
+        Ok(_) => {
+            register_key(key);
+            Ok(())
+        }
+        Err(e) => {
+            if is_mock_or_insecure_keyring() {
+                modify_mock_vault(|map| {
+                    map.insert(key.to_string(), value.to_string());
+                    Ok(())
+                })?;
+                register_key(key);
+                Ok(())
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 pub fn get_secret(key: &str) -> Result<String, keyring::Error> {
+    if is_mock_or_insecure_keyring() {
+        if let Some(path) = get_mock_vault_file_path() {
+            let map = load_mock_vault(&path);
+            if let Some(val) = map.get(key) {
+                return Ok(val.clone());
+            }
+        }
+        return Err(keyring::Error::NoEntry);
+    }
+
     let entry = Entry::new(SERVICE_NAME, key)?;
-    entry.get_password()
+    match entry.get_password() {
+        Ok(val) => Ok(val),
+        Err(e) => {
+            if is_mock_or_insecure_keyring() {
+                if let Some(path) = get_mock_vault_file_path() {
+                    let map = load_mock_vault(&path);
+                    if let Some(val) = map.get(key) {
+                        return Ok(val.clone());
+                    }
+                }
+            }
+            Err(e)
+        }
+    }
 }
 
 pub fn delete_secret(key: &str) -> Result<(), keyring::Error> {
+    if is_mock_or_insecure_keyring() {
+        let _ = modify_mock_vault(|map| {
+            map.remove(key);
+            Ok(())
+        });
+        unregister_key(key);
+        return Ok(());
+    }
+
     let entry = Entry::new(SERVICE_NAME, key)?;
     match entry.delete_credential() {
         Ok(_) => {}
         Err(keyring::Error::NoEntry) => {
             // Secret already removed from OS Keyring; proceed to unregister from registry
         }
-        Err(e) => return Err(e),
+        Err(e) => {
+            if is_mock_or_insecure_keyring() {
+                let _ = modify_mock_vault(|map| {
+                    map.remove(key);
+                    Ok(())
+                });
+                unregister_key(key);
+                return Ok(());
+            }
+            return Err(e);
+        }
     }
     unregister_key(key);
     Ok(())

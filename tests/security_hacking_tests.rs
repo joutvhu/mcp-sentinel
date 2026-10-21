@@ -1548,6 +1548,8 @@ fn hack_test_tofu_profile_mismatch_requires_reauthorization() {
     let spec = format!("API_KEY={}", vault_key);
 
     // Pre-authorize with read-only profile
+    let prev_config_dir = std::env::var("MCP_SENTINEL_CONFIG_DIR").ok();
+    let prev_allow_insecure = std::env::var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE").ok();
     std::env::set_var("MCP_SENTINEL_CONFIG_DIR", temp_dir.to_str().unwrap());
     std::env::set_var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE", "1");
 
@@ -1593,10 +1595,16 @@ fn hack_test_tofu_profile_mismatch_requires_reauthorization() {
         "Running without profile when granted with read-only must prompt and fail when denied"
     );
 
-    // Cleanup
+    // Cleanup & Restore
     let _ = mcp_sentinel::vault::delete_secret(vault_key);
-    std::env::remove_var("MCP_SENTINEL_CONFIG_DIR");
-    std::env::remove_var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE");
+    match prev_config_dir {
+        Some(v) => std::env::set_var("MCP_SENTINEL_CONFIG_DIR", v),
+        None => std::env::remove_var("MCP_SENTINEL_CONFIG_DIR"),
+    }
+    match prev_allow_insecure {
+        Some(v) => std::env::set_var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE", v),
+        None => std::env::remove_var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE"),
+    }
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 

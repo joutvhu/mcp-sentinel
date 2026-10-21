@@ -276,6 +276,13 @@ mod tests {
     fn test_ssh_session_denies_immediately_without_hanging() {
         let _guard = DIALOG_TEST_LOCK.lock().unwrap();
         let cmd = vec!["node".to_string(), "server.js".to_string()];
+
+        let prev_mock = std::env::var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE").ok();
+        let prev_ci = std::env::var("CI").ok();
+        let prev_gh = std::env::var("GITHUB_ACTIONS").ok();
+        let prev_non_int = std::env::var("MCP_SENTINEL_NON_INTERACTIVE").ok();
+        let prev_test_mode = std::env::var("MCP_SENTINEL_TEST_MODE").ok();
+
         std::env::remove_var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE");
         std::env::remove_var("CI");
         std::env::remove_var("GITHUB_ACTIONS");
@@ -289,6 +296,23 @@ mod tests {
         let elapsed = start.elapsed();
 
         std::env::remove_var("SSH_CONNECTION");
+
+        // Restore environment variables
+        if let Some(v) = prev_mock {
+            std::env::set_var("MCP_SENTINEL_MOCK_DIALOG_RESPONSE", v);
+        }
+        if let Some(v) = prev_ci {
+            std::env::set_var("CI", v);
+        }
+        if let Some(v) = prev_gh {
+            std::env::set_var("GITHUB_ACTIONS", v);
+        }
+        if let Some(v) = prev_non_int {
+            std::env::set_var("MCP_SENTINEL_NON_INTERACTIVE", v);
+        }
+        if let Some(v) = prev_test_mode {
+            std::env::set_var("MCP_SENTINEL_TEST_MODE", v);
+        }
 
         assert_eq!(decision, AuthDecision::Deny);
         assert!(

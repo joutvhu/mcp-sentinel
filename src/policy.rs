@@ -484,6 +484,10 @@ mod tests {
     #[test]
     fn test_master_key_fail_closed_when_keyring_unavailable() {
         let _lock = TEST_LOCK.lock().unwrap();
+        let prev_mock = std::env::var("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE").ok();
+        let prev_allow = std::env::var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE").ok();
+        let prev_dir = std::env::var("MCP_SENTINEL_CONFIG_DIR").ok();
+
         std::env::set_var("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE", "1");
         std::env::remove_var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE");
 
@@ -510,11 +514,20 @@ mod tests {
         let key_file = temp_dir.join(".master_key");
         assert!(key_file.exists());
 
-        // Cleanup
-        std::env::remove_var("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE");
-        std::env::remove_var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE");
-        std::env::remove_var("MCP_SENTINEL_CONFIG_DIR");
+        // Cleanup & Restore
         let _ = fs::remove_dir_all(&temp_dir);
+        match prev_mock {
+            Some(v) => std::env::set_var("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE", v),
+            None => std::env::remove_var("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE"),
+        }
+        match prev_allow {
+            Some(v) => std::env::set_var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE", v),
+            None => std::env::remove_var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE"),
+        }
+        match prev_dir {
+            Some(v) => std::env::set_var("MCP_SENTINEL_CONFIG_DIR", v),
+            None => std::env::remove_var("MCP_SENTINEL_CONFIG_DIR"),
+        }
     }
 
     #[test]

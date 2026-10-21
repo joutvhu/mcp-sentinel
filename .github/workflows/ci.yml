@@ -11,6 +11,7 @@ env:
   RUST_BACKTRACE: 1
   MCP_SENTINEL_NON_INTERACTIVE: "1"
   MCP_SENTINEL_ALLOW_INSECURE_KEYFILE: "1"
+  MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE: "1"
 
 jobs:
   test:
@@ -54,7 +55,7 @@ jobs:
               mkdir -p ~/.local/share/keyrings
               eval \$(printf '\n' | gnome-keyring-daemon --unlock)
               eval \$(gnome-keyring-daemon --start --components=secrets)
-              cargo test --verbose
+              cargo test --verbose -- --test-threads=1
             "
           elif [ "$RUNNER_OS" = "macOS" ]; then
             KEYCHAIN="$HOME/Library/Keychains/ci.keychain-db"
@@ -63,9 +64,9 @@ jobs:
             security unlock-keychain -p "" "$KEYCHAIN"
             security default-keychain -s "$KEYCHAIN"
             security list-keychains -d user -s "$KEYCHAIN"
-            cargo test --verbose
+            cargo test --verbose -- --test-threads=1
           else
-            cargo test --verbose
+            cargo test --verbose -- --test-threads=1
           fi
         shell: bash
 
