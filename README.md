@@ -262,24 +262,9 @@ Alternatively, wrap your server commands directly in your agent's MCP configurat
 
 Upon first launch, `mcp-sentinel` detects a new command fingerprint and displays a clean, native security prompt:
 
-```
-+------------------------------------------------------------------+
-| MCP-Sentinel Security Authorization                              |
-+------------------------------------------------------------------+
-| MCP Server is requesting access to environment secrets:          |
-|                                                                  |
-| Server: GitHub MCP Server                                        |
-| Binary: npx                                                      |
-| Full Command: npx -y @modelcontextprotocol/server-github         |
-| Requested Secrets: [GITHUB_TOKEN]                                |
-|                                                                  |
-| Do you authorize this MCP server to access these secrets?        |
-| - [Yes] (Allow): Authorize and remember for future sessions      |
-| - [No]  (Deny):  Reject access and terminate immediately         |
-|                                                                  |
-|             [ Yes (Allow) ]           [ No (Deny) ]              |
-+------------------------------------------------------------------+
-```
+<p align="center">
+  <img src="docs/images/tofu-consent-dialog.png" alt="MCP-Sentinel Native TOFU Consent Dialog" width="520" />
+</p>
 
 - **[Yes] (Allow)**: Saves the cryptographic grant to `permissions.json`. Subsequent runs execute instantly with zero interruptions.
 - **[No] (Deny)**: Immediately aborts execution and denies access to credentials (closing the dialog via the `X` button also denies access).
