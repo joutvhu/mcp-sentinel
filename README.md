@@ -92,7 +92,7 @@ flowchart TD
 | **Tool Call Firewall (L7)**       | Unrestricted tool execution   | In-stream JSON-RPC inspection & Profile Filtering |
 | **Data Loss Prevention (DLP)**    | Secrets echoed to stdout leak | Byte-level streaming masking across chunk borders |
 | **Orphan Process Cleanup**        | Zombie processes linger       | Automatic tree termination (Job Object / Signals) |
-| **Protocol Overhead**             | Baseline                      | **Zero perceptible latency** (~26,000 msgs/sec)   |
+| **Protocol Overhead**             | Baseline                      | **Zero perceptible latency** (~46,000+ msgs/sec)  |
 
 ---
 
@@ -608,19 +608,23 @@ mcp-sentinel ui
    - **Concurrency Tests (5 tests)**: Concurrent policy grants, vault key registrations, audit logging, and tool policy upserts under multi-threaded load.
    - **Fast-Path Tests (3 tests)**: Zero-copy raw bytes stream preservation for allowed single requests, batch requests, and mixed batch payload filtering.
    - **Stress Tests (6 tests)**: 100-secret bulk injection, corrupted policy resilience, Unicode & Vietnamese character preservation, stdio separation, and custom exit code propagation.
-   - **Performance Benchmarks (4 tests)**: High-load async stdio streaming (~26,000 JSON-RPC msgs/sec), multithreaded SHA-256 hashing (~320,000 ops/sec).
+   - **Performance Benchmarks (4 tests)**: High-load async stdio streaming (~46,000+ JSON-RPC msgs/sec), multithreaded SHA-256 hashing (~8,000,000 ops/sec).
 
 ---
 
 ## 🛠️ Performance Metrics
 
-Because `mcp-sentinel` is built in Rust using asynchronous zero-copy IO streams (`tokio`), overhead is virtually
-undetectable:
+Benchmark results measured under production release profile (`--release`):
 
-- **Startup Overhead**: `< 2.5 ms`
-- **Stdio Message Throughput**: `~26,000 messages / second`
-- **Memory Footprint**: `~4.5 MB RSS`
-- **Binary Size**: `~2.4 MB` (fully standalone, zero runtime dependencies)
+| Metric | Measured Value | Notes & Context |
+| :--- | :--- | :--- |
+| **Stdio Streaming Throughput** | **~46,000 - 48,000 msgs/sec** | Fast-Path Zero-Copy proxying on 5,000 JSON-RPC ping frames |
+| **Internal Initialization Latency** | **< 1.5 ms** | Keyring credential resolution, HMAC policy verification, and env sanitization |
+| **SHA-256 Fingerprint Hashing** | **~1,400,000 ops/sec** | Single-threaded canonical command hashing (`~8,000,000 ops/sec` with 16 threads) |
+| **Environment Sanitization** | **~6,500 ops/sec** | Full default-deny whitelist validation and safe-variable injection |
+| **Memory Footprint (RSS)** | **~8.5 - 10.5 MB** | Peak Working Set during high-throughput bidirectional streaming |
+| **Binary Size (Standard Edition)** | **~3.8 MB** | Fully standalone statically linked binary including modular Ratatui TUI dashboard |
+| **Binary Size (Headless Edition)** | **~3.4 MB** | Micro-binary without TUI dependencies (`--no-default-features`), ideal for CI/CD & Docker |
 
 ---
 
@@ -649,7 +653,7 @@ No. <code>permissions.json</code> is guarded by an <b>HMAC-SHA256 signature</b> 
 
 <details>
 <summary><b>Does mcp-sentinel slow down my AI interactions?</b></summary>
-No. Once authorized, <code>mcp-sentinel</code> acts as an ultra-fast asynchronous duplex stream proxy. It forwards raw bytes between <code>stdin</code> and <code>stdout</code> at over 26,000 messages per second with microsecond latency.
+No. Once authorized, <code>mcp-sentinel</code> acts as an ultra-fast asynchronous duplex stream proxy. It forwards raw bytes between <code>stdin</code> and <code>stdout</code> at over 46,000 messages per second with microsecond latency.
 </details>
 
 <details>
