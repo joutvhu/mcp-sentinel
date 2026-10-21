@@ -2,14 +2,15 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, develop]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, develop]
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   MCP_SENTINEL_NON_INTERACTIVE: "1"
+  MCP_SENTINEL_ALLOW_INSECURE_KEYFILE: "1"
 
 jobs:
   test:
