@@ -15,6 +15,7 @@ fn setup_temp_config_dir(prefix: &str) -> PathBuf {
     fs::create_dir_all(&temp_dir).expect("Failed to create temp config dir");
     std::env::set_var("MCP_SENTINEL_CONFIG_DIR", &temp_dir);
     std::env::set_var("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE", "1");
+    std::env::set_var("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE", "1");
     temp_dir
 }
 

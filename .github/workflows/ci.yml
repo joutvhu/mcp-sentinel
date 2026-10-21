@@ -47,7 +47,17 @@ jobs:
       - name: Run unit & integration tests
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
-            xvfb-run --auto-servernum dbus-run-session cargo test --verbose
+            mkdir -p ~/.local/share/keyrings
+            xvfb-run --auto-servernum dbus-run-session bash -c "
+              mkdir -p ~/.local/share/keyrings
+              eval \$(printf '\n' | gnome-keyring-daemon --unlock)
+              eval \$(gnome-keyring-daemon --start --components=secrets)
+              cargo test --verbose
+            "
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            security unlock-keychain -p "" ~/Library/Keychains/login.keychain-db || security unlock-keychain -p "" ~/Library/Keychains/login.keychain || true
+            security set-keychain-settings -lut 21600 ~/Library/Keychains/login.keychain-db || security set-keychain-settings -lut 21600 ~/Library/Keychains/login.keychain || true
+            cargo test --verbose
           else
             cargo test --verbose
           fi

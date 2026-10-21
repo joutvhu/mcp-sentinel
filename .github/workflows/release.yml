@@ -99,11 +99,19 @@ jobs:
           # 3. Create tar.gz archives
           STD_ARCHIVE="mcp-sentinel-${TARGET}.tar.gz"
           tar -czvf "$STD_ARCHIVE" -C pkg/standard "$BIN_NAME"
-          shasum -a 256 "$STD_ARCHIVE" > "$STD_ARCHIVE.sha256"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$STD_ARCHIVE" > "$STD_ARCHIVE.sha256"
+          else
+            shasum -a 256 "$STD_ARCHIVE" > "$STD_ARCHIVE.sha256"
+          fi
 
           HEADLESS_ARCHIVE="mcp-sentinel-headless-${TARGET}.tar.gz"
           tar -czvf "$HEADLESS_ARCHIVE" -C pkg/headless "$BIN_NAME"
-          shasum -a 256 "$HEADLESS_ARCHIVE" > "$HEADLESS_ARCHIVE.sha256"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$HEADLESS_ARCHIVE" > "$HEADLESS_ARCHIVE.sha256"
+          else
+            shasum -a 256 "$HEADLESS_ARCHIVE" > "$HEADLESS_ARCHIVE.sha256"
+          fi
 
       - name: Upload release assets to GitHub Release
         uses: softprops/action-gh-release@v2
