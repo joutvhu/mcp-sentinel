@@ -50,10 +50,9 @@ pub fn is_ssh_session() -> bool {
 }
 
 /// Displays a native OS dialog asking the user whether to grant access to secrets.
-/// Offers three options:
-/// - [Allow Always]: Grants access and records permission in permissions.json for future runs.
-/// - [Allow Once]: Grants access for this execution only (ephemeral; does not save to disk).
-/// - [Deny]: Rejects access and terminates the process.
+/// Uses standard Yes/No confirmation:
+/// - [Yes] (Allow): Grants access and records permission in permissions.json for future runs.
+/// - [No]  (Deny):  Rejects access and terminates the process immediately.
 ///
 /// Includes a 30-second timeout to prevent locking host IDEs/clients indefinitely.
 pub fn ask_user_permission(
@@ -132,65 +131,37 @@ pub fn ask_user_permission(
         String::new()
     };
 
-    #[cfg(windows)]
     let message = format!(
         "MCP Server is requesting access to environment secrets:\n\n\
         {}Binary: {}\n\
         Full Command: {}\n\
         Requested Secrets: [{}]\n\n\
         Do you authorize this MCP server to access these secrets?\n\
-        - [Yes]    -> Allow Always (Save permission for future sessions)\n\
-        - [No]     -> Allow Once   (Authorize this run only, do not save)\n\
-        - [Cancel] -> Deny         (Reject access and terminate)",
-        server_line, safe_binary, safe_full_cmd, safe_secrets
-    );
-
-    #[cfg(not(windows))]
-    let message = format!(
-        "MCP Server is requesting access to environment secrets:\n\n\
-        {}Binary: {}\n\
-        Full Command: {}\n\
-        Requested Secrets: [{}]\n\n\
-        Do you authorize this MCP server to access these secrets?\n\
-        - [Allow Always]: Authorize and remember for future sessions\n\
-        - [Allow Once]: Authorize for this run only (do not remember)\n\
-        - [Deny]: Reject access and terminate",
+        - [Yes] (Allow): Authorize and remember for future sessions\n\
+        - [No]  (Deny):  Reject access and terminate immediately",
         server_line, safe_binary, safe_full_cmd, safe_secrets
     );
 
     let (tx, rx) = mpsc::channel();
 
     let title = "MCP-Sentinel Security Authorization".to_string();
-    let btn_always = "Allow Always".to_string();
-    let btn_once = "Allow Once".to_string();
-    let btn_deny = "Deny".to_string();
 
     thread::spawn(move || {
         let result = MessageDialog::new()
             .set_title(&title)
             .set_description(&message)
             .set_level(MessageLevel::Warning)
-            .set_buttons(MessageButtons::YesNoCancelCustom(
-                btn_always, btn_once, btn_deny,
-            ))
+            .set_buttons(MessageButtons::YesNo)
             .show();
 
         let decision = match result {
-            MessageDialogResult::Custom(ref text) if text == "Allow Always" => {
+            MessageDialogResult::Yes | MessageDialogResult::Ok => AuthDecision::AllowAlways,
+            MessageDialogResult::No | MessageDialogResult::Cancel => AuthDecision::Deny,
+            MessageDialogResult::Custom(ref text)
+                if text.to_lowercase().contains("yes") || text.to_lowercase().contains("allow") =>
+            {
                 AuthDecision::AllowAlways
             }
-            MessageDialogResult::Custom(ref text) if text == "Allow Once" => {
-                AuthDecision::AllowOnce
-            }
-            MessageDialogResult::Custom(ref text) if text == "Deny" => AuthDecision::Deny,
-            // Fallback for Windows standard MessageBox buttons:
-            // [Yes] maps to Allow Always
-            // [No] maps to Allow Once
-            // [Cancel] / [Close 'X'] maps to Deny
-            MessageDialogResult::Yes => AuthDecision::AllowAlways,
-            MessageDialogResult::No => AuthDecision::AllowOnce,
-            MessageDialogResult::Cancel => AuthDecision::Deny,
-            MessageDialogResult::Ok => AuthDecision::AllowAlways,
             _ => AuthDecision::Deny,
         };
         let _ = tx.send(decision);

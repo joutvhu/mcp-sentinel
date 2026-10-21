@@ -41,10 +41,9 @@ This release introduces comprehensive Layer 7 tool call interception, automated 
   - Safe-word exclusion dictionary preventing false-positive redaction of common literals (`false`, `true`, `null`, `production`, etc.).
   - Can be bypassed via `--no-redact` when verbatim stream transmission is explicitly required.
 
-- **Ephemeral "Allow Once" Consent:**
-  - Native TOFU dialog offers three choices: `[Yes]` (Allow Always), `[No]` (Allow Once), and `[Cancel]` (Deny).
-  - "Allow Once" (`[No]`) grants in-memory access for the current session only without persisting authorization to `permissions.json`.
-  - CLI flag `--allow-once` (alias `--once`) enforces ephemeral permissions even for pre-authorized servers.
+- **Ephemeral "Allow Once" Testing Flag:**
+  - CLI flag `--allow-once` (alias `--once`) enforces ephemeral in-memory permissions without persisting authorization to `permissions.json` (ideal for test scripts and CI).
+  - Cleaned up native interactive TOFU popup to standard Yes (Allow) / No (Deny) to prevent repetitive annoying prompts when IDEs reload.
 
 - **Security Audit Logging (`mcp-sentinel audit`):**
   - Opt-in cryptographic security audit trail recorded to `~/.mcp-sentinel/audit.log`.

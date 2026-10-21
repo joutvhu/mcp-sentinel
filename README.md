@@ -260,53 +260,30 @@ Alternatively, wrap your server commands directly in your agent's MCP configurat
 
 ### Step 3: Authorize via Trust-On-First-Use (TOFU)
 
-Upon first launch, `mcp-sentinel` detects a new command fingerprint and displays a native security prompt offering granular consent:
+Upon first launch, `mcp-sentinel` detects a new command fingerprint and displays a clean, native security prompt:
 
-* **Windows (Native Dialog)**:
-  ```
-  +------------------------------------------------------------------+
-  | MCP-Sentinel Security Authorization                              |
-  +------------------------------------------------------------------+
-  | MCP Server is requesting access to environment secrets:          |
-  |                                                                  |
-  | Server: GitHub MCP Server                                        |
-  | Binary: npx                                                      |
-  | Full Command: npx -y @modelcontextprotocol/server-github          |
-  | Requested Secrets: [GITHUB_TOKEN]                                |
-  |                                                                  |
-  | Do you authorize this MCP server to access these secrets?        |
-  | - [Yes]    -> Allow Always (Save permission for future sessions) |
-  | - [No]     -> Allow Once   (Authorize this run only, do not save)|
-  | - [Cancel] -> Deny         (Reject access and terminate)         |
-  |                                                                  |
-  |       [Yes]                   [No]                  [Cancel]     |
-  +------------------------------------------------------------------+
-  ```
+```
++------------------------------------------------------------------+
+| MCP-Sentinel Security Authorization                              |
++------------------------------------------------------------------+
+| MCP Server is requesting access to environment secrets:          |
+|                                                                  |
+| Server: GitHub MCP Server                                        |
+| Binary: npx                                                      |
+| Full Command: npx -y @modelcontextprotocol/server-github         |
+| Requested Secrets: [GITHUB_TOKEN]                                |
+|                                                                  |
+| Do you authorize this MCP server to access these secrets?        |
+| - [Yes] (Allow): Authorize and remember for future sessions      |
+| - [No]  (Deny):  Reject access and terminate immediately         |
+|                                                                  |
+|             [ Yes (Allow) ]           [ No (Deny) ]              |
++------------------------------------------------------------------+
+```
 
-* **macOS & Linux (Native Dialog)**:
-  ```
-  +------------------------------------------------------------------+
-  | MCP-Sentinel Security Authorization                              |
-  +------------------------------------------------------------------+
-  | MCP Server is requesting access to environment secrets:          |
-  |                                                                  |
-  | Server: GitHub MCP Server                                        |
-  | Binary: npx                                                      |
-  | Full Command: npx -y @modelcontextprotocol/server-github          |
-  | Requested Secrets: [GITHUB_TOKEN]                                |
-  |                                                                  |
-  | Do you authorize this MCP server to access these secrets?        |
-  | - [Allow Always]: Authorize and remember for future sessions     |
-  | - [Allow Once]: Authorize for this run only (do not remember)    |
-  | - [Deny]: Reject access and terminate                            |
-  |                                                                  |
-  |   [Allow Always]          [Allow Once]                [Deny]     |
-  +------------------------------------------------------------------+
-  ```
-
-- **[Allow Always] / [Yes]**: Saves the cryptographic grant to `permissions.json`. Subsequent runs execute instantly with zero interruptions.
-- **[Allow Once] / [No]**: Authorizes the server for the current run only, keeping the grant in-memory. The next launch will prompt again.
-- **[Deny] / [Cancel]**: Immediately aborts execution and denies access to credentials (closing the dialog via the `X` button or Esc also denies access).
+- **[Yes] (Allow)**: Saves the cryptographic grant to `permissions.json`. Subsequent runs execute instantly with zero interruptions.
+- **[No] (Deny)**: Immediately aborts execution and denies access to credentials (closing the dialog via the `X` button also denies access).
+- *Tip for temporary testing*: If you need to test an MCP server without permanently saving permissions, pass the `--allow-once` CLI flag: `mcp-sentinel run --allow-once -- <COMMAND>`.
 
 ---
 
