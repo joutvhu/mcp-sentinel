@@ -290,7 +290,12 @@ pub fn load_profiles_unlocked() -> Result<ToolPolicyFile, String> {
             profiles: default_preset_profiles(),
             signature: None,
         };
-        save_profiles_unlocked(&file)?;
+        if let Err(e) = save_profiles_unlocked(&file) {
+            eprintln!(
+                "[mcp-sentinel] Warning: Could not persist default tool profiles to disk ({}). Using in-memory presets.",
+                e
+            );
+        }
         return Ok(file);
     }
 
