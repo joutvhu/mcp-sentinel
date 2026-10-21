@@ -132,6 +132,7 @@ pub fn ask_user_permission(
         String::new()
     };
 
+    #[cfg(windows)]
     let message = format!(
         "MCP Server is requesting access to environment secrets:\n\n\
         {}Binary: {}\n\
@@ -141,6 +142,19 @@ pub fn ask_user_permission(
         - [Yes]    -> Allow Always (Save permission for future sessions)\n\
         - [No]     -> Allow Once   (Authorize this run only, do not save)\n\
         - [Cancel] -> Deny         (Reject access and terminate)",
+        server_line, safe_binary, safe_full_cmd, safe_secrets
+    );
+
+    #[cfg(not(windows))]
+    let message = format!(
+        "MCP Server is requesting access to environment secrets:\n\n\
+        {}Binary: {}\n\
+        Full Command: {}\n\
+        Requested Secrets: [{}]\n\n\
+        Do you authorize this MCP server to access these secrets?\n\
+        - [Allow Always]: Authorize and remember for future sessions\n\
+        - [Allow Once]: Authorize for this run only (do not remember)\n\
+        - [Deny]: Reject access and terminate",
         server_line, safe_binary, safe_full_cmd, safe_secrets
     );
 

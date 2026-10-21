@@ -262,29 +262,51 @@ Alternatively, wrap your server commands directly in your agent's MCP configurat
 
 Upon first launch, `mcp-sentinel` detects a new command fingerprint and displays a native security prompt offering granular consent:
 
-```
-+------------------------------------------------------------------+
-| MCP Sentinel Security Authorization                              |
-+------------------------------------------------------------------+
-| The following MCP Server is requesting access to secrets:        |
-|                                                                  |
-| Server: GitHub MCP Server                                        |
-| Binary: npx                                                      |
-| Full Command: npx -y @modelcontextprotocol/server-github          |
-| Requested Secrets: [GITHUB_TOKEN]                                |
-|                                                                  |
-| Do you authorize this MCP server to access these secrets?        |
-| - [Yes]    -> Allow Always (Save permission for future sessions) |
-| - [No]     -> Allow Once   (Authorize this run only, do not save)|
-| - [Cancel] -> Deny         (Reject access and terminate)         |
-|                                                                  |
-|       [Yes]                   [No]                  [Cancel]     |
-+------------------------------------------------------------------+
-```
+* **Windows (Native Dialog)**:
+  ```
+  +------------------------------------------------------------------+
+  | MCP-Sentinel Security Authorization                              |
+  +------------------------------------------------------------------+
+  | MCP Server is requesting access to environment secrets:          |
+  |                                                                  |
+  | Server: GitHub MCP Server                                        |
+  | Binary: npx                                                      |
+  | Full Command: npx -y @modelcontextprotocol/server-github          |
+  | Requested Secrets: [GITHUB_TOKEN]                                |
+  |                                                                  |
+  | Do you authorize this MCP server to access these secrets?        |
+  | - [Yes]    -> Allow Always (Save permission for future sessions) |
+  | - [No]     -> Allow Once   (Authorize this run only, do not save)|
+  | - [Cancel] -> Deny         (Reject access and terminate)         |
+  |                                                                  |
+  |       [Yes]                   [No]                  [Cancel]     |
+  +------------------------------------------------------------------+
+  ```
 
-- **[Yes] (Allow Always)**: Saves the cryptographic grant to `permissions.json`. Subsequent runs execute instantly with zero interruptions.
-- **[No] (Allow Once)**: Authorizes the server for the current run only, keeping the grant in-memory. The next launch will prompt again.
-- **[Cancel] (Deny)**: Immediately aborts execution and denies access to credentials (closing the dialog via the `X` button also denies access).
+* **macOS & Linux (Native Dialog)**:
+  ```
+  +------------------------------------------------------------------+
+  | MCP-Sentinel Security Authorization                              |
+  +------------------------------------------------------------------+
+  | MCP Server is requesting access to environment secrets:          |
+  |                                                                  |
+  | Server: GitHub MCP Server                                        |
+  | Binary: npx                                                      |
+  | Full Command: npx -y @modelcontextprotocol/server-github          |
+  | Requested Secrets: [GITHUB_TOKEN]                                |
+  |                                                                  |
+  | Do you authorize this MCP server to access these secrets?        |
+  | - [Allow Always]: Authorize and remember for future sessions     |
+  | - [Allow Once]: Authorize for this run only (do not remember)    |
+  | - [Deny]: Reject access and terminate                            |
+  |                                                                  |
+  |   [Allow Always]          [Allow Once]                [Deny]     |
+  +------------------------------------------------------------------+
+  ```
+
+- **[Allow Always] / [Yes]**: Saves the cryptographic grant to `permissions.json`. Subsequent runs execute instantly with zero interruptions.
+- **[Allow Once] / [No]**: Authorizes the server for the current run only, keeping the grant in-memory. The next launch will prompt again.
+- **[Deny] / [Cancel]**: Immediately aborts execution and denies access to credentials (closing the dialog via the `X` button or Esc also denies access).
 
 ---
 
