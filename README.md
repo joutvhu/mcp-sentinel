@@ -1,7 +1,7 @@
 # 🛡️ MCP Sentinel
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-93%2F93%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-135%2F135%20passing-brightgreen.svg)](tests/)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 [![Security](https://img.shields.io/badge/security-Zero--Trust%20%7C%20HMAC--SHA256-orange.svg)](#security-guarantees)
 
@@ -21,27 +21,19 @@ secrets on `stdout` with **Data Loss Prevention (DLP)** streaming filters.
 The Model Context Protocol (MCP) enables LLMs (such as Claude Desktop, Cursor, Continue, Windsurf) to execute local
 commands and access external tools. However, the standard deployment model introduces severe security vulnerabilities:
 
-```
-❌ CONVENTIONAL MCP ARCHITECTURE (DANGEROUS):
+```mermaid
+flowchart TD
+    Host["Claude Desktop / Cursor / AI Host"]
+    ConfigFile[("📄 Plaintext Config<br/>claude_desktop_config.json / mcp.json")]
+    Child["⚠️ Unprotected MCP Child Process<br/>(Node.js / Python / Binary)"]
+    HostEnv[("💥 Full Host Environment<br/>AWS_SECRET_ACCESS_KEY<br/>GITHUB_TOKEN / SSH_AUTH_SOCK<br/>DB_PASSWORD / OPENAI_API_KEY")]
+    Attacker["🚨 Malicious / Compromised Dependency<br/>(Exfiltrates Credentials to Remote Server)"]
 
-  +---------------------+
-  |   Claude / Cursor   |
-  +----------+----------+
-             |
-             | Reads plaintext tokens from claude_desktop_config.json
-             v
-  +-----------------------------------------------------------+
-  |                   Local MCP Child Process                 |
-  |                                                           |
-  |  1. Plaintext secrets visible in process list & disk      |
-  |  2. Inherits ALL host env vars:                           |
-  |     - AWS_SECRET_ACCESS_KEY                               |
-  |     - GITHUB_TOKEN / SSH_AUTH_SOCK                        |
-  |     - DB_PASSWORD / OPENAI_API_KEY                        |
-  |  3. Any compromised npm/python package can exfiltrate all |
-  |     host credentials back to an attacker's server!        |
-  |  4. Injected secrets echoed to stdout leak into LLM chats |
-  +-----------------------------------------------------------+
+    ConfigFile -.->|"1. Exposes plaintext credentials"| Host
+    Host -->|"Spawns process with cleartext args"| Child
+    HostEnv -->|"2. Ambient environment fully inherited"| Child
+    Child -->|"3. Silently harvests & exfiltrates host keys"| Attacker
+    Child -->|"4. Injected secrets echoed on stdout leak into LLM chats"| Host
 ```
 
 1. **Plaintext Secrets on Disk**: Credentials are saved as cleartext in user-accessible JSON files. These are frequently
@@ -63,34 +55,32 @@ commands and access external tools. However, the standard deployment model intro
 `mcp-sentinel` acts as an intermediary transparent security proxy between the AI Host application and the actual MCP
 server:
 
-```
-✅ ZERO-TRUST MCP-SENTINEL ARCHITECTURE:
+```mermaid
+flowchart TD
+    Host["Claude / Cursor / IDE"]
+    
+    subgraph Sentinel["🛡️ mcp-sentinel (Zero-Trust Security Proxy)"]
+        direction TB
+        L7["[8] Layer 7 Tool Firewall<br/>(In-stream stdin inspection & -32001 drop)"]
+        TOFU["[3] TOFU Native Consent Dialog<br/>(Prompt user on first execution)"]
+        HMAC["[2] HMAC-SHA256 Policy Verifier<br/>(Cryptographic tamper detection)"]
+        Vault["[1] Native OS Keyring Vault<br/>(Windows Credential Mgr / Keychain / Secret Service)"]
+        Sanitizer["[4, 5] Environment Sanitizer<br/>(Default-Deny whitelist & pass-env validation)"]
+        DLP["[7] Stream DLP Redactor<br/>(Real-time stdout secret masking)"]
+        JobObj["[6] Process Supervisor<br/>(Windows Job Object / Unix Process Groups)"]
+    end
+    
+    Child["Isolated Child Process<br/>(Node.js / Python / Binary MCP Server)"]
 
-  +---------------------+
-  |   Claude / Cursor   |
-  +----------+----------+
-             | (Stdio JSON-RPC)
-             v
-  +----------------------------------------------------------------+
-  |                         mcp-sentinel                           |
-  |                                                                |
-  |  [1] Resolves secrets directly from Native OS Keyring          |
-  |      (Windows Credential Manager / Apple Keychain / SecretSvc) |
-  |  [2] Verifies HMAC-SHA256 signature on permissions policy      |
-  |  [3] Prompts Native OS Consent Dialog on first run (TOFU)      |
-  |  [4] Wipes host environment (drops AWS, SSH, GITHUB keys)      |
-  |  [5] Injects ONLY explicitly authorized secrets                |
-  |  [6] Attaches to OS Job Object (guarantees orphan cleanup)     |
-  |  [7] Stream DLP: Real-time secret masking on child stdout      |
-  |  [8] L7 Tool Firewall: Intercepts tools/call on stdin          |
-  |      (drops blocked calls with -32001 before child execution)  |
-  +------------------------------+---------------------------------+
-                                 | (Sanitized Stdio Stream)
-                                 v
-                  +------------------------------+
-                  |    Isolated Child Process    |
-                  |  (npx / python / binary MCP) |
-                  +------------------------------+
+    Host -->|"JSON-RPC Request (stdin)"| L7
+    L7 -->|"Authorized Commands"| Child
+    Vault -.->|"Inject Authorized Secrets"| Sanitizer
+    HMAC -.->|"Verify Policy"| Sanitizer
+    TOFU -.->|"Grant Consent"| Sanitizer
+    Sanitizer -->|"Sanitized Env & Secrets"| Child
+    Child -->|"Raw Output (stdout)"| DLP
+    DLP -->|"Safe Output (stdout)"| Host
+    JobObj -.->|"Process Tree Teardown"| Child
 ```
 
 | Security Feature                  | Conventional MCP              | With `mcp-sentinel`                               |
@@ -291,6 +281,126 @@ Upon first launch, `mcp-sentinel` detects a new command fingerprint and displays
 
 ---
 
+## 🛡️ Layer 7 Tool Call Firewall & Security Profiles
+
+When autonomous AI agents (Claude, Cursor, Cline, etc.) connect to MCP servers, they often possess capabilities to execute destructive tools — such as deleting production files, dropping database tables, wiping git branches, or making irreversible API calls. 
+
+`mcp-sentinel` includes an in-stream **Layer 7 JSON-RPC Tool Firewall** that inspects tool requests on `stdin` before the child process ever sees them.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor LLM as AI Host / LLM
+    participant Proxy as mcp-sentinel (L7 Firewall)
+    participant Child as Isolated Child Process (MCP)
+
+    LLM->>Proxy: JSON-RPC tools/call ("drop_database")
+    Note over Proxy: Inspect Tool Policy Profile (e.g., 'read-only')
+    alt Tool matches Deny pattern or not Whitelisted
+        Proxy-->>LLM: JSON-RPC Error -32001 (Execution Denied)
+        Note over Proxy,Child: Request is DROPPED (Child never sees it)
+    else Tool is Authorized
+        Proxy->>Child: Fast-Path Forward (Raw JSON-RPC bytes)
+        Child-->>Proxy: Tool Result (stdout)
+        Note over Proxy: Real-time DLP Secret Masking
+        Proxy-->>LLM: Sanitized Output
+    end
+```
+
+### 1. Built-in Security Profiles
+
+Sentinel provides pre-configured, production-ready security profiles out of the box:
+
+| Profile Name | Default Action | Behavior & Rules |
+| :--- | :--- | :--- |
+| `read-only` | **Deny All Mutating Calls** | Whitelists read/query/list/get operations (`read_*`, `get_*`, `list_*`, `query_*`, `select_*`, etc.). Strictly blocks any mutating, writing, or executing tool calls. |
+| `no-destructive` | **Permit Safe Operations** | Allows general development operations while blocking high-risk tools matching `*delete*`, `*drop*`, `*remove*`, `*destroy*`, `*terminate*`, `*truncate*`. |
+
+To enforce a profile, simply add `--profile <NAME>`:
+```bash
+mcp-sentinel run --profile read-only --secrets DB_PASSWORD -- npx -y @modelcontextprotocol/server-postgres postgresql://...
+```
+
+### 2. Ad-Hoc Tool Filtering (`--allow-tools` & `--deny-tools`)
+
+You can also specify inline tool restrictions directly in your server configuration without creating a profile:
+
+```bash
+# Block any delete or drop tools, allow everything else
+mcp-sentinel run --deny-tools "*delete*,*drop*,*truncate*" -- node server.js
+
+# Allow only specific query and inspect tools
+mcp-sentinel run --allow-tools "query_*,inspect_*,get_*" -- python server.py
+```
+> ⚠️ **Rule Precedence**: Deny patterns (`--deny-tools`) strictly override allow patterns.
+
+### 3. Custom Reusable Profiles
+
+Create, customize, and manage reusable profiles signed with HMAC-SHA256:
+
+```bash
+# Create an analytics policy
+mcp-sentinel profile set db-analyst \
+  --allow "get_*,select_*,query_*,explain_*" \
+  --deny "*drop*,*delete*,*truncate*,*alter*,*update*,*insert*" \
+  --description "Read-only database analytics queries"
+
+# View profile rules
+mcp-sentinel profile get db-analyst
+```
+
+### 4. What Happens When a Tool is Blocked?
+* **Zero Disruption to AI Chat**: Sentinel synthesizes a valid JSON-RPC error response (`code: -32001`, `message: "[MCP-SENTINEL] Tool 'xyz' is blocked by security policy 'read-only'"`). The AI model gracefully understands the action was denied and continues the conversation without crashing.
+* **Child Process Unaffected**: The target child process never receives the blocked frame, ensuring no accidental side-effects or partial mutations occur.
+
+---
+
+## 🚫 How MCP Sentinel Blocks Dangerous Programs & Hijacks
+
+Beyond secret protection and tool firewalling, `mcp-sentinel` enforces four distinct layers of **program execution blocking and sandboxing** to prevent malicious code execution:
+
+```mermaid
+flowchart TD
+    subgraph L1["1. Unauthorized Program Execution Block (TOFU)"]
+        A1["Unverified Command / Altered Arguments"] --> A2{"User Consent Dialog"}
+        A2 -->|Deny| A3["Immediate Halt (Exit Code 1)"]
+        A2 -->|Allow| A4["Proceed to Isolation Sandbox"]
+    end
+
+    subgraph L2["2. Anti-Recursion Security Lock"]
+        B1["Child Process in Sandbox"] --> B2{"Attempt mcp-sentinel invocation?"}
+        B2 -->|Yes| B3["Blocked by Canary & PATH Stripping (Exit Code 13)"]
+        B2 -->|No| B4["Normal Tool Execution"]
+    end
+
+    subgraph L3["3. Dangerous Runtime Control Shield"]
+        C1["Host Environment & --pass-env"] --> C2{"Check Dangerous Controls"}
+        C2 -->|NODE_OPTIONS, LD_PRELOAD, etc.| C3["Strictly Stripped / Blocked"]
+        C2 -->|Safe Non-Secret Variables| C4["Clean Environment Injected"]
+    end
+
+    subgraph L4["4. Zombie & Grandchild Process Cleanup"]
+        D1["Host IDE Closes or Crashes"] --> D2["Windows Job Object / Unix SIGTERM"]
+        D2 --> D3["All Child & Grandchild Processes Terminated"]
+    end
+```
+
+1. **Unauthorized Program Blocking (TOFU Consent)**:
+   - Untrusted MCP commands or altered arguments are blocked immediately on launch.
+   - If the user selects `[Deny]` in the consent dialog, Sentinel immediately halts with exit code `1` without launching the child command or decrypting any secrets.
+2. **Anti-Recursion Lock (Canary Defense)**:
+   - Malicious MCP packages cannot spawn a subshell to run `mcp-sentinel secrets get` or elevate privileges.
+   - Sentinel sets `MCP_SENTINEL_CHILD_CONTEXT=1` in the child environment and removes its own binary directory from `PATH`.
+   - Any attempt to run `mcp-sentinel` inside the sandbox instantly terminates with exit code `13` (`Permission Denied`).
+3. **Dangerous Runtime Hijack Defense**:
+   - Attackers frequently exploit environment variables to force Node.js or Python to load malicious code before executing the main script (e.g. `NODE_OPTIONS=--require /tmp/evil.js` or `PYTHONPATH=/tmp/pwned`).
+   - Sentinel blocks dangerous runtime control variables (`NODE_OPTIONS`, `PYTHONPATH`, `PYTHONSTARTUP`, `RUBYOPT`, `PERL5OPT`, `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, etc.), even if a user or config file mistakenly includes them in `--pass-env`.
+4. **Zombie & Grandchild Process Termination**:
+   - Standard MCP servers often leave orphaned background processes running when the IDE closes or crashes.
+   - Sentinel attaches subprocesses to Windows Job Objects (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) and Unix Process Groups (`SIGTERM`), ensuring all child and grandchild processes are cleanly killed.
+
+---
+
 ## 💻 CLI Command Reference
 
 ### `mcp-sentinel run`
@@ -305,6 +415,7 @@ mcp-sentinel run [OPTIONS] -- <COMMAND> [ARGS]...
   - **Plain secret**: `GITHUB_TOKEN` (retrieves `GITHUB_TOKEN` from vault and injects as `GITHUB_TOKEN`).
   - **Aliased secret**: `TARGET_ENV=VAULT_KEY` (e.g., `API_KEY=OPENAI_PROD_KEY` retrieves `OPENAI_PROD_KEY` from vault and injects into child environment as `API_KEY`).
   - Allows multiple MCP servers using identical generic environment variable names (such as `API_KEY` or `DATABASE_URL`) to map cleanly to distinct secrets stored in your vault.
+- `--pass-env <VAR1,VAR2,...>` (alias `--env`): Comma-separated list of non-secret host environment variables to safely pass through to the child MCP server (e.g., `DEBUG,LANG,CONFIG_PATH`). Dangerous runtime control variables (`NODE_OPTIONS`, `PYTHONPATH`, `PYTHONSTARTUP`, `RUBYOPT`, `PERL5OPT`, `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, etc.) are automatically blocked to prevent execution hijacks.
 - `--allow-once` (alias `--once`): Authorize this execution once without persisting permission to `permissions.json`.
 - `--profile <NAME>`: Apply a pre-configured or custom tool policy profile (e.g., `read-only`, `no-destructive`).
 - `--allow-tools <PATS>`: Comma-separated allowed tool patterns with wildcard support (e.g., `read_*,get_*,list_*`).
@@ -341,7 +452,7 @@ Inspect and audit Trust-On-First-Use grants.
 mcp-sentinel permissions list
 
 # Pre-authorize an MCP server command without interactive prompts (ideal for headless servers, SSH, or CI/CD)
-mcp-sentinel permissions grant [--name <NAME>] --secrets <SPEC1,SPEC2,...> -- <COMMAND> [ARGS]...
+mcp-sentinel permissions grant [--name <NAME>] --secrets <SPEC1,SPEC2,...> [--profile <NAME>] -- <COMMAND> [ARGS]...
 
 # Revoke authorization for a specific fingerprint
 mcp-sentinel permissions revoke <FINGERPRINT_HEX>
@@ -439,8 +550,11 @@ mcp-sentinel migrate --file /path/to/custom_mcp_config.json
 mcp-sentinel migrate --dry-run
 ```
 
-- Automatically generates a `.bak` backup file before overwriting.
-- Safely resolves naming collisions by automatically generating isolated secret aliases.
+- Automatically generates a `.bak` backup file before overwriting (can be skipped with `--no-backup`).
+- Automatically resolves `${env:VAR}`, `${VAR}`, and `$VAR` from host environment so real credentials are encrypted in the vault.
+- Intelligently preserves non-secret configuration variables using `--pass-env` to prevent DLP over-redaction.
+- Full support for JSONC (JSON with comments and trailing commas).
+- Safely resolves naming collisions by automatically generating isolated secret aliases and `SRV_` prefixes for colliding keys.
 - Skips servers that are already protected by `mcp-sentinel`.
 
 ### `mcp-sentinel ui` (alias: `tui`, `dashboard`)
@@ -487,11 +601,13 @@ mcp-sentinel ui
 7. **Hardware-Backed CSPRNG**: The master signing key is generated via native OS entropy (`rand::rngs::OsRng`), ensuring cryptographic unpredictability.
 8. **Layer 7 JSON-RPC Tool Firewall**: Intercepts `tools/call` requests on child process `stdin`. If an LLM or user attempts to call a tool blocked by the active profile or `--deny-tools` pattern, `mcp-sentinel` synthesizes a JSON-RPC `-32001` error response back to the host IDE, alerts `stderr`, and completely drops the request from reaching the child process.
 9. **Opt-in Structured Audit Trail**: When enabled via `--audit` or `MCP_SENTINEL_AUDIT=1`, captures structured security events (`SERVER_START`, `TOOL_CALL_ALLOWED`, `TOOL_CALL_BLOCKED`, `TOFU_DECISION`, `SERVER_EXIT`) in JSON-Lines format. Default is OFF (zero disk footprint). Plaintext secret values are strictly stripped and never logged, and logs rotate automatically at 5MB.
-10. **Verified by 82 Automated Tests across 5 Suites**:
-   - **Unit Tests (48 tests)**: Vault operations, alias mapping & validation, fingerprint collision resistance, HMAC signing & tamper rejection for policies and tool profiles, wildcard pattern evaluation, multi-agent auto-migration path discovery, environment sanitizer whitelist, dialog text sanitization, interactive TUI navigation and state management, stream-boundary DLP redaction, Allow Once ephemeral grants, and structured audit entry serialization.
-   - **Integration Tests (8 tests)**: Subprocess execution, CLI parsing, exit code propagation, secret list, permissions list, TUI launch commands, and full migration workflow.
-   - **Security Penetration Tests (16 tests)**: Host environment variable exfiltration blocked, command injection (`;&|`) neutralized, forged permission injection rejected, argument smuggling intercepted, child process sandbox recursion blocked, reserved key name rejection, alias tamper resistance, stdout DLP secret masking, Allow Once non-persistence, Layer 7 tool call firewall drop & error synthesis, and audit log default-off & secret leak immunity.
-   - **Stress Tests (6 tests)**: 100-secret bulk injection, corrupted policy resilience, Unicode & Vietnamese character preservation, stdio separation.
+10. **Verified by 135 Automated Tests across 7 Suites**:
+   - **Unit Tests (77 tests)**: Vault operations, alias mapping & validation, fingerprint collision resistance, HMAC signing & tamper rejection for policies and tool profiles, wildcard pattern evaluation, multi-agent auto-migration path discovery, environment sanitizer whitelist, pass-env forwarding & dangerous variable blocking, dialog text sanitization & multi-byte UTF-8 preservation, interactive TUI navigation and widget state management, stream-boundary DLP redaction, JSON-escaped secret masking, Allow Once ephemeral grants, atomic file locking, and structured audit entry serialization.
+   - **Security Penetration & Hacking Tests (31 tests)**: Host environment variable exfiltration blocked, command injection (`;&|`) neutralized, forged permission injection rejected, argument smuggling intercepted, child process sandbox recursion blocked, reserved key name rejection, alias tamper resistance, stdout DLP secret masking, Allow Once non-persistence, Layer 7 tool call firewall drops & error synthesis, multi-line formatted JSON-RPC firewall interception, batch request inspection, Unicode homoglyph & Trojan Source defense, stdin buffer DoS defense, grandchild pipe hang mitigation, dangerous runtime control variable blocking, and audit log default-off & secret leak immunity.
+   - **Integration Tests (9 tests)**: Subprocess execution, CLI parsing, exit code propagation, secret list, permissions list, TUI launch commands, pass-env end-to-end propagation, and full migration workflow.
+   - **Concurrency Tests (5 tests)**: Concurrent policy grants, vault key registrations, audit logging, and tool policy upserts under multi-threaded load.
+   - **Fast-Path Tests (3 tests)**: Zero-copy raw bytes stream preservation for allowed single requests, batch requests, and mixed batch payload filtering.
+   - **Stress Tests (6 tests)**: 100-secret bulk injection, corrupted policy resilience, Unicode & Vietnamese character preservation, stdio separation, and custom exit code propagation.
    - **Performance Benchmarks (4 tests)**: High-load async stdio streaming (~26,000 JSON-RPC msgs/sec), multithreaded SHA-256 hashing (~320,000 ops/sec).
 
 ---
@@ -548,6 +664,16 @@ No. <code>mcp-sentinel</code> enforces a strict two-layer anti-recursion defense
 <details>
 <summary><b>How do I revoke a previously granted permission?</b></summary>
 Run <code>mcp-sentinel permissions list</code> to view all active grants and their fingerprint IDs. To revoke a single grant, run <code>mcp-sentinel permissions revoke &lt;FINGERPRINT_HEX&gt;</code>. To wipe all grants and force fresh prompts for every server, run <code>mcp-sentinel permissions reset</code>.
+</details>
+
+<details>
+<summary><b>Can an autonomous AI model accidentally delete files or drop databases?</b></summary>
+Not if protected by Sentinel. By specifying <code>--profile read-only</code>, <code>--profile no-destructive</code>, or inline rules like <code>--deny-tools "*delete*,*drop*"</code>, Sentinel's Layer 7 Tool Firewall intercepts destructive <code>tools/call</code> requests on <code>stdin</code> and drops them with a JSON-RPC <code>-32001</code> error before the child process can execute them.
+</details>
+
+<details>
+<summary><b>How does Sentinel prevent malicious packages from hijacking child runtimes?</b></summary>
+Attackers often try to use runtime flags (such as <code>NODE_OPTIONS="--require /tmp/malicious.js"</code> or <code>LD_PRELOAD</code>) to inject code before the main application starts. Sentinel automatically detects and strips all dangerous execution controls, even if requested via <code>--pass-env</code>.
 </details>
 
 <details>
