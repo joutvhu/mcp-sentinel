@@ -138,9 +138,9 @@ pub fn ask_user_permission(
         Full Command: {}\n\
         Requested Secrets: [{}]\n\n\
         Do you authorize this MCP server to access these secrets?\n\
-        - [Allow Always]: Authorize and remember for future sessions\n\
-        - [Allow Once]: Authorize for this run only (do not remember)\n\
-        - [Deny]: Reject access and terminate",
+        - [Yes]    -> Allow Always (Save permission for future sessions)\n\
+        - [No]     -> Allow Once   (Authorize this run only, do not save)\n\
+        - [Cancel] -> Deny         (Reject access and terminate)",
         server_line, safe_binary, safe_full_cmd, safe_secrets
     );
 
@@ -169,10 +169,14 @@ pub fn ask_user_permission(
                 AuthDecision::AllowOnce
             }
             MessageDialogResult::Custom(ref text) if text == "Deny" => AuthDecision::Deny,
+            // Fallback for Windows standard MessageBox buttons:
+            // [Yes] maps to Allow Always
+            // [No] maps to Allow Once
+            // [Cancel] / [Close 'X'] maps to Deny
             MessageDialogResult::Yes => AuthDecision::AllowAlways,
-            MessageDialogResult::No => AuthDecision::Deny,
-            MessageDialogResult::Ok => AuthDecision::AllowAlways,
+            MessageDialogResult::No => AuthDecision::AllowOnce,
             MessageDialogResult::Cancel => AuthDecision::Deny,
+            MessageDialogResult::Ok => AuthDecision::AllowAlways,
             _ => AuthDecision::Deny,
         };
         let _ = tx.send(decision);

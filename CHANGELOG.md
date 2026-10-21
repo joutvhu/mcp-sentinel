@@ -42,8 +42,8 @@ This release introduces comprehensive Layer 7 tool call interception, automated 
   - Can be bypassed via `--no-redact` when verbatim stream transmission is explicitly required.
 
 - **Ephemeral "Allow Once" Consent:**
-  - Native TOFU dialog now offers three choices: `[Allow Always]`, `[Allow Once]`, and `[Deny]`.
-  - "Allow Once" grants in-memory access for the current session only without persisting authorization to `permissions.json`.
+  - Native TOFU dialog offers three choices: `[Yes]` (Allow Always), `[No]` (Allow Once), and `[Cancel]` (Deny).
+  - "Allow Once" (`[No]`) grants in-memory access for the current session only without persisting authorization to `permissions.json`.
   - CLI flag `--allow-once` (alias `--once`) enforces ephemeral permissions even for pre-authorized servers.
 
 - **Security Audit Logging (`mcp-sentinel audit`):**
