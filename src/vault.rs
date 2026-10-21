@@ -206,7 +206,7 @@ pub fn unregister_key(key: &str) {
     });
 }
 
-pub fn is_mock_or_insecure_keyring() -> bool {
+fn is_mock_or_insecure_keyring() -> bool {
     #[cfg(any(test, debug_assertions))]
     {
         if std::env::var("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE").is_ok() {
@@ -218,12 +218,12 @@ pub fn is_mock_or_insecure_keyring() -> bool {
         .unwrap_or(false)
 }
 
-pub fn get_mock_vault_file_path() -> Option<PathBuf> {
+fn get_mock_vault_file_path() -> Option<PathBuf> {
     let keys_path = get_vault_keys_file_path()?;
     Some(keys_path.with_file_name(".insecure_vault.json"))
 }
 
-pub fn get_mock_vault_lock_path() -> Option<PathBuf> {
+fn get_mock_vault_lock_path() -> Option<PathBuf> {
     let keys_path = get_vault_keys_file_path()?;
     Some(keys_path.with_file_name(".insecure_vault.json.lock"))
 }
