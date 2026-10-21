@@ -1,12 +1,28 @@
+use std::fs;
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
+fn setup_temp_config_dir(prefix: &str) -> PathBuf {
+    use std::time::SystemTime;
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_dir =
+        std::env::temp_dir().join(format!("{}_{}_{}", prefix, std::process::id(), nanos));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).expect("Failed to create temp config dir");
+    temp_dir
+}
+
 #[test]
 fn test_fast_path_allowed_request_preserves_raw_formatting_and_large_int() {
     let _lock = TEST_LOCK.lock().unwrap();
+    let temp_dir = setup_temp_config_dir("mcp_test_fp_single");
 
     let server_script = r#"
         const readline = require('readline');
@@ -17,6 +33,10 @@ fn test_fast_path_allowed_request_preserves_raw_formatting_and_large_int() {
     "#;
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_CONFIG_DIR", &temp_dir)
+        .env("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE", "1")
+        .env("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE", "1")
+        .env("MCP_SENTINEL_NON_INTERACTIVE", "1")
         .args([
             "run",
             "--profile",
@@ -37,10 +57,12 @@ fn test_fast_path_allowed_request_preserves_raw_formatting_and_large_int() {
     let raw_request = r#"{"params":{"name":"read_data","args":{"z":1,"a":2}},"method":"tools/call","id":9007199254740993,"jsonrpc":"2.0"}"#;
 
     {
-        let stdin = child.stdin.as_mut().expect("Failed to open child stdin");
+        let mut stdin = child.stdin.take().expect("Failed to open child stdin");
         stdin
             .write_all(format!("{}\n", raw_request).as_bytes())
             .expect("Failed to write to stdin");
+        stdin.flush().expect("Failed to flush stdin");
+        drop(stdin);
     }
 
     let output = child.wait_with_output().expect("Failed to wait for child");
@@ -52,11 +74,14 @@ fn test_fast_path_allowed_request_preserves_raw_formatting_and_large_int() {
         raw_request,
         stdout
     );
+
+    let _ = fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn test_fast_path_batch_all_allowed_preserves_raw_bytes() {
     let _lock = TEST_LOCK.lock().unwrap();
+    let temp_dir = setup_temp_config_dir("mcp_test_fp_batch");
 
     let server_script = r#"
         const readline = require('readline');
@@ -67,6 +92,10 @@ fn test_fast_path_batch_all_allowed_preserves_raw_bytes() {
     "#;
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_CONFIG_DIR", &temp_dir)
+        .env("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE", "1")
+        .env("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE", "1")
+        .env("MCP_SENTINEL_NON_INTERACTIVE", "1")
         .args([
             "run",
             "--profile",
@@ -85,10 +114,12 @@ fn test_fast_path_batch_all_allowed_preserves_raw_bytes() {
     let raw_batch = r#"[{"id":"id-beta","jsonrpc":"2.0","method":"tools/call","params":{"name":"read_records"}},{"id":"id-alpha","jsonrpc":"2.0","method":"tools/call","params":{"name":"query_status"}}]"#;
 
     {
-        let stdin = child.stdin.as_mut().expect("Failed to open child stdin");
+        let mut stdin = child.stdin.take().expect("Failed to open child stdin");
         stdin
             .write_all(format!("{}\n", raw_batch).as_bytes())
             .expect("Failed to write to stdin");
+        stdin.flush().expect("Failed to flush stdin");
+        drop(stdin);
     }
 
     let output = child.wait_with_output().expect("Failed to wait for child");
@@ -100,11 +131,14 @@ fn test_fast_path_batch_all_allowed_preserves_raw_bytes() {
         raw_batch,
         stdout
     );
+
+    let _ = fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn test_mixed_batch_filters_blocked_and_reserializes_allowed() {
     let _lock = TEST_LOCK.lock().unwrap();
+    let temp_dir = setup_temp_config_dir("mcp_test_fp_mixed");
 
     let server_script = r#"
         const readline = require('readline');
@@ -115,6 +149,10 @@ fn test_mixed_batch_filters_blocked_and_reserializes_allowed() {
     "#;
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
+        .env("MCP_SENTINEL_CONFIG_DIR", &temp_dir)
+        .env("MCP_SENTINEL_ALLOW_INSECURE_KEYFILE", "1")
+        .env("MCP_SENTINEL_MOCK_KEYRING_UNAVAILABLE", "1")
+        .env("MCP_SENTINEL_NON_INTERACTIVE", "1")
         .args([
             "run",
             "--profile",
@@ -134,10 +172,12 @@ fn test_mixed_batch_filters_blocked_and_reserializes_allowed() {
     let mixed_batch = r#"[{"id":101,"jsonrpc":"2.0","method":"tools/call","params":{"name":"read_ok"}},{"id":102,"jsonrpc":"2.0","method":"tools/call","params":{"name":"drop_table"}}]"#;
 
     {
-        let stdin = child.stdin.as_mut().expect("Failed to open child stdin");
+        let mut stdin = child.stdin.take().expect("Failed to open child stdin");
         stdin
             .write_all(format!("{}\n", mixed_batch).as_bytes())
             .expect("Failed to write to stdin");
+        stdin.flush().expect("Failed to flush stdin");
+        drop(stdin);
     }
 
     let output = child.wait_with_output().expect("Failed to wait for child");
@@ -167,4 +207,6 @@ fn test_mixed_batch_filters_blocked_and_reserializes_allowed() {
         "Child process must NEVER receive blocked drop_table call: {}",
         stdout
     );
+
+    let _ = fs::remove_dir_all(&temp_dir);
 }

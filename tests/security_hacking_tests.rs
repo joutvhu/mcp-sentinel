@@ -654,7 +654,7 @@ fn hack_test_layer7_tool_firewall_blocks_destructive_call() {
 
     {
         use std::io::Write;
-        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+        let mut stdin = child.stdin.take().expect("Failed to open stdin");
 
         // 1. Send allowed call: "read_users"
         stdin
@@ -665,6 +665,8 @@ fn hack_test_layer7_tool_firewall_blocks_destructive_call() {
         stdin
             .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"drop_database\"}}\n")
             .unwrap();
+        stdin.flush().unwrap();
+        drop(stdin);
     }
 
     let output = child.wait_with_output().expect("Failed to read output");
@@ -777,7 +779,7 @@ fn hack_test_audit_logging_default_off_and_safe_capture() {
 
     {
         use std::io::Write;
-        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+        let mut stdin = child.stdin.take().expect("Failed to open stdin");
 
         // Send allowed tool call
         stdin
@@ -788,6 +790,8 @@ fn hack_test_audit_logging_default_off_and_safe_capture() {
         stdin
             .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"delete_records\"}}\n")
             .unwrap();
+        stdin.flush().unwrap();
+        drop(stdin);
     }
 
     let output = child.wait_with_output().expect("Failed to read output");
@@ -868,7 +872,7 @@ fn hack_test_layer7_tool_firewall_blocks_batch_requests() {
 
     {
         use std::io::Write;
-        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+        let mut stdin = child.stdin.take().expect("Failed to open stdin");
 
         // Send a mixed batch: id: 1 is allowed ('read_data'), id: 2 is blocked ('drop_database')
         let batch_payload = serde_json::json!([
@@ -906,6 +910,8 @@ fn hack_test_layer7_tool_firewall_blocks_batch_requests() {
         ]);
         let all_blocked_str = format!("{}\n", all_blocked_batch);
         stdin.write_all(all_blocked_str.as_bytes()).unwrap();
+        stdin.flush().unwrap();
+        drop(stdin);
     }
 
     let output = child.wait_with_output().expect("Failed to read output");
@@ -1052,12 +1058,13 @@ fn hack_test_multiline_formatted_jsonrpc_firewall_blocks_destructive_call() {
 
     {
         use std::io::Write;
-        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+        let mut stdin = child.stdin.take().expect("Failed to open stdin");
 
         // Send a multi-line formatted JSON-RPC tool call
         let multiline_payload = "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 99,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"drop_database\"\n  }\n}\n";
         stdin.write_all(multiline_payload.as_bytes()).unwrap();
         stdin.flush().unwrap();
+        drop(stdin);
     }
 
     let output = child.wait_with_output().expect("Failed to read output");
@@ -1189,7 +1196,7 @@ fn hack_test_layer7_tool_firewall_blocks_malformed_name_call() {
         .expect("Failed to spawn mcp-sentinel");
 
     {
-        let stdin = child.stdin.as_mut().expect("Failed to open child stdin");
+        let mut stdin = child.stdin.take().expect("Failed to open child stdin");
         // Request declaring tools/call but missing params.name
         let malformed_req = serde_json::json!({
             "jsonrpc": "2.0",
@@ -1198,6 +1205,8 @@ fn hack_test_layer7_tool_firewall_blocks_malformed_name_call() {
             "params": { "not_name": "delete_database" }
         });
         writeln!(stdin, "{}", malformed_req).unwrap();
+        stdin.flush().unwrap();
+        drop(stdin);
     }
 
     let output = child.wait_with_output().expect("Failed to read output");
@@ -1251,7 +1260,7 @@ fn hack_test_layer7_tool_firewall_blocks_unicode_homoglyphs_and_trojan_source() 
         .expect("Failed to spawn mcp-sentinel");
 
     {
-        let stdin = child.stdin.as_mut().expect("Failed to open child stdin");
+        let mut stdin = child.stdin.take().expect("Failed to open child stdin");
         let cyrillic_req = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 101,
@@ -1259,6 +1268,8 @@ fn hack_test_layer7_tool_firewall_blocks_unicode_homoglyphs_and_trojan_source() 
             "params": { "name": "d\u{0435}lete_database" }
         });
         writeln!(stdin, "{}", cyrillic_req).unwrap();
+        stdin.flush().unwrap();
+        drop(stdin);
     }
 
     let output = child.wait_with_output().expect("Failed to read output");
@@ -1360,7 +1371,7 @@ fn hack_test_jsonrpc_stream_framing_integrity_on_interleaved_synthetic_error() {
     std::thread::sleep(std::time::Duration::from_millis(50));
 
     {
-        let stdin = child.stdin.as_mut().expect("Failed to open child stdin");
+        let mut stdin = child.stdin.take().expect("Failed to open child stdin");
         // Send a blocked request that triggers a synthetic error from the firewall
         let blocked_req = serde_json::json!({
             "jsonrpc": "2.0",
@@ -1369,6 +1380,8 @@ fn hack_test_jsonrpc_stream_framing_integrity_on_interleaved_synthetic_error() {
             "params": { "name": "drop_database" }
         });
         writeln!(stdin, "{}", blocked_req).unwrap();
+        stdin.flush().unwrap();
+        drop(stdin);
     }
 
     let output = child.wait_with_output().expect("Failed to read output");
@@ -1443,7 +1456,7 @@ fn hack_test_stdin_buffer_dos_protection() {
         .expect("Failed to spawn mcp-sentinel");
 
     {
-        let stdin = child.stdin.as_mut().expect("Failed to open child stdin");
+        let mut stdin = child.stdin.take().expect("Failed to open child stdin");
         // Stream slightly more than 16MB of non-newline data
         let chunk = vec![b'a'; 64 * 1024]; // 64 KB chunk
         for _ in 0..270 {
@@ -1453,6 +1466,7 @@ fn hack_test_stdin_buffer_dos_protection() {
             }
         }
         let _ = stdin.flush();
+        drop(stdin);
     }
 
     let output = child.wait_with_output().expect("Failed to read output");
@@ -1495,7 +1509,7 @@ fn test_stdin_buffer_custom_env_override() {
         .expect("Failed to spawn mcp-sentinel");
 
     {
-        let stdin = child.stdin.as_mut().expect("Failed to open child stdin");
+        let mut stdin = child.stdin.take().expect("Failed to open child stdin");
         // Stream slightly more than 1 MB (20 * 64 KB = 1.28 MB)
         let chunk = vec![b'a'; 64 * 1024];
         for _ in 0..20 {
@@ -1504,6 +1518,7 @@ fn test_stdin_buffer_custom_env_override() {
             }
         }
         let _ = stdin.flush();
+        drop(stdin);
     }
 
     let output = child.wait_with_output().expect("Failed to read output");

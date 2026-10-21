@@ -9,6 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  MCP_SENTINEL_NON_INTERACTIVE: "1"
 
 jobs:
   test:
