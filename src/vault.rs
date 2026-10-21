@@ -222,7 +222,13 @@ pub fn get_secret(key: &str) -> Result<String, keyring::Error> {
 
 pub fn delete_secret(key: &str) -> Result<(), keyring::Error> {
     let entry = Entry::new(SERVICE_NAME, key)?;
-    entry.delete_credential()?;
+    match entry.delete_credential() {
+        Ok(_) => {}
+        Err(keyring::Error::NoEntry) => {
+            // Secret already removed from OS Keyring; proceed to unregister from registry
+        }
+        Err(e) => return Err(e),
+    }
     unregister_key(key);
     Ok(())
 }
@@ -242,6 +248,10 @@ mod tests {
 
                 let res_del = delete_secret(&key);
                 assert!(res_del.is_ok());
+
+                // Idempotent deletion: deleting an already deleted/missing key must succeed and not error
+                let res_del_again = delete_secret(&key);
+                assert!(res_del_again.is_ok(), "Deleting non-existent secret must be idempotent");
             }
             Err(e) => {
                 eprintln!(
