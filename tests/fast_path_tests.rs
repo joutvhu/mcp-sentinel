@@ -26,19 +26,29 @@ fn get_test_server_command() -> (&'static str, Vec<String>) {
             vec![
                 "-e".to_string(),
                 r#"
-                    const readline = require('readline');
-                    const rl = readline.createInterface({ input: process.stdin, terminal: false });
-                    rl.on('line', (line) => {
-                        console.log("RECEIVED:" + line);
+                    let buf = '';
+                    process.stdin.setEncoding('utf8');
+                    process.stdin.on('data', (chunk) => {
+                        buf += chunk;
+                        const lines = buf.split(/\r?\n/);
+                        buf = lines.pop();
+                        for (const line of lines) {
+                            if (line.trim().length > 0) {
+                                console.log("RECEIVED:" + line);
+                            }
+                        }
                     });
-                    rl.on('close', () => {
+                    process.stdin.on('end', () => {
+                        if (buf.trim().length > 0) {
+                            console.log("RECEIVED:" + buf);
+                        }
                         process.exit(0);
                     });
                 "#
                 .to_string(),
             ],
         )
-    } else {
+    } else if which::which("python3").is_ok() {
         (
             "python3",
             vec![
@@ -48,7 +58,24 @@ fn get_test_server_command() -> (&'static str, Vec<String>) {
 import sys
 for line in sys.stdin:
     line = line.rstrip('\r\n')
-    print("RECEIVED:" + line, flush=True)
+    if line:
+        print("RECEIVED:" + line, flush=True)
+"#
+                .to_string(),
+            ],
+        )
+    } else {
+        (
+            "python",
+            vec![
+                "-u".to_string(),
+                "-c".to_string(),
+                r#"
+import sys
+for line in sys.stdin:
+    line = line.rstrip('\r\n')
+    if line:
+        print("RECEIVED:" + line, flush=True)
 "#
                 .to_string(),
             ],
