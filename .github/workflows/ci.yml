@@ -56,8 +56,12 @@ jobs:
               cargo test --verbose
             "
           elif [ "$RUNNER_OS" = "macOS" ]; then
-            security unlock-keychain -p "" ~/Library/Keychains/login.keychain-db || security unlock-keychain -p "" ~/Library/Keychains/login.keychain || true
-            security set-keychain-settings -lut 21600 ~/Library/Keychains/login.keychain-db || security set-keychain-settings -lut 21600 ~/Library/Keychains/login.keychain || true
+            KEYCHAIN="$HOME/Library/Keychains/ci.keychain-db"
+            security create-keychain -p "" "$KEYCHAIN" || true
+            security set-keychain-settings -lut 21600 "$KEYCHAIN"
+            security unlock-keychain -p "" "$KEYCHAIN"
+            security default-keychain -s "$KEYCHAIN"
+            security list-keychains -d user -s "$KEYCHAIN"
             cargo test --verbose
           else
             cargo test --verbose
