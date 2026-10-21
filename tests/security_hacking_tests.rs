@@ -1350,13 +1350,13 @@ fn hack_test_jsonrpc_stream_framing_integrity_on_interleaved_synthetic_error() {
         // After 200ms, finish the line
         setTimeout(() => {
             process.stdout.write(',"completed":true}}\n');
+            process.exit(0);
         }, 200);
 
         const rl = readline.createInterface({ input: process.stdin, terminal: false });
         rl.on('line', (line) => {
             // Should not receive blocked calls
         });
-        rl.on('close', () => process.exit(0));
     "#;
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
