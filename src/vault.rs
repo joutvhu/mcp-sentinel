@@ -228,6 +228,13 @@ pub fn get_mock_vault_lock_path() -> Option<PathBuf> {
     Some(keys_path.with_file_name(".insecure_vault.json.lock"))
 }
 
+fn get_global_mock_vault_file_path() -> Option<PathBuf> {
+    let base_dirs = BaseDirs::new()?;
+    let config_dir = base_dirs.config_dir().join(SERVICE_NAME);
+    let _ = fs::create_dir_all(&config_dir);
+    Some(config_dir.join(".insecure_vault.json"))
+}
+
 fn load_mock_vault(path: &std::path::Path) -> HashMap<String, String> {
     if let Ok(content) = fs::read_to_string(path) {
         if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&content) {
@@ -271,6 +278,47 @@ where
     Ok(res)
 }
 
+fn write_mock_vault_key(key: &str, value: &str) -> Result<(), keyring::Error> {
+    modify_mock_vault(|map| {
+        map.insert(key.to_string(), value.to_string());
+        Ok(())
+    })?;
+    if let (Some(global_path), Some(local_path)) = (
+        get_global_mock_vault_file_path(),
+        get_mock_vault_file_path(),
+    ) {
+        if local_path != global_path {
+            let lock_path = global_path.with_file_name(".insecure_vault.json.lock");
+            if let Ok(_lock) = crate::lock::FileLock::acquire(&lock_path) {
+                let mut map = load_mock_vault(&global_path);
+                map.insert(key.to_string(), value.to_string());
+                let _ = save_mock_vault_unlocked(&global_path, &map);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn remove_mock_vault_key(key: &str) {
+    let _ = modify_mock_vault(|map| {
+        map.remove(key);
+        Ok(())
+    });
+    if let (Some(global_path), Some(local_path)) = (
+        get_global_mock_vault_file_path(),
+        get_mock_vault_file_path(),
+    ) {
+        if local_path != global_path {
+            let lock_path = global_path.with_file_name(".insecure_vault.json.lock");
+            if let Ok(_lock) = crate::lock::FileLock::acquire(&lock_path) {
+                let mut map = load_mock_vault(&global_path);
+                map.remove(key);
+                let _ = save_mock_vault_unlocked(&global_path, &map);
+            }
+        }
+    }
+}
+
 pub fn set_secret(key: &str, value: &str) -> Result<(), keyring::Error> {
     if !key.starts_with("__") {
         if let Err(msg) = validate_key_name(key) {
@@ -279,10 +327,7 @@ pub fn set_secret(key: &str, value: &str) -> Result<(), keyring::Error> {
     }
 
     if is_mock_or_insecure_keyring() {
-        modify_mock_vault(|map| {
-            map.insert(key.to_string(), value.to_string());
-            Ok(())
-        })?;
+        write_mock_vault_key(key, value)?;
         register_key(key);
         return Ok(());
     }
@@ -295,10 +340,7 @@ pub fn set_secret(key: &str, value: &str) -> Result<(), keyring::Error> {
         }
         Err(e) => {
             if is_mock_or_insecure_keyring() {
-                modify_mock_vault(|map| {
-                    map.insert(key.to_string(), value.to_string());
-                    Ok(())
-                })?;
+                write_mock_vault_key(key, value)?;
                 register_key(key);
                 Ok(())
             } else {
@@ -311,6 +353,12 @@ pub fn set_secret(key: &str, value: &str) -> Result<(), keyring::Error> {
 pub fn get_secret(key: &str) -> Result<String, keyring::Error> {
     if is_mock_or_insecure_keyring() {
         if let Some(path) = get_mock_vault_file_path() {
+            let map = load_mock_vault(&path);
+            if let Some(val) = map.get(key) {
+                return Ok(val.clone());
+            }
+        }
+        if let Some(path) = get_global_mock_vault_file_path() {
             let map = load_mock_vault(&path);
             if let Some(val) = map.get(key) {
                 return Ok(val.clone());
@@ -330,6 +378,12 @@ pub fn get_secret(key: &str) -> Result<String, keyring::Error> {
                         return Ok(val.clone());
                     }
                 }
+                if let Some(path) = get_global_mock_vault_file_path() {
+                    let map = load_mock_vault(&path);
+                    if let Some(val) = map.get(key) {
+                        return Ok(val.clone());
+                    }
+                }
             }
             Err(e)
         }
@@ -338,10 +392,7 @@ pub fn get_secret(key: &str) -> Result<String, keyring::Error> {
 
 pub fn delete_secret(key: &str) -> Result<(), keyring::Error> {
     if is_mock_or_insecure_keyring() {
-        let _ = modify_mock_vault(|map| {
-            map.remove(key);
-            Ok(())
-        });
+        remove_mock_vault_key(key);
         unregister_key(key);
         return Ok(());
     }
@@ -354,10 +405,7 @@ pub fn delete_secret(key: &str) -> Result<(), keyring::Error> {
         }
         Err(e) => {
             if is_mock_or_insecure_keyring() {
-                let _ = modify_mock_vault(|map| {
-                    map.remove(key);
-                    Ok(())
-                });
+                remove_mock_vault_key(key);
                 unregister_key(key);
                 return Ok(());
             }

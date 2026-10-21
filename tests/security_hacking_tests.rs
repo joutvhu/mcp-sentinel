@@ -148,7 +148,7 @@ fn hack_test_argument_smuggling_fingerprint_isolation() {
 /// mcp-sentinel must immediately abort with non-zero code and not expose other secrets.
 #[test]
 fn hack_test_requesting_missing_secret_fails_safely() {
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let cmd = vec![
         "node".to_string(),
         "-e".to_string(),
@@ -252,7 +252,7 @@ fn hack_test_setting_reserved_key_names_blocked() {
 /// and that the underlying vault key name is not leaked into the child process.
 #[test]
 fn hack_test_secret_aliasing_end_to_end() {
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let vault_key = "TEST_VAULT_SOURCE_SECRET_1";
     let target_env = "TARGET_MCP_API_KEY";
     let secret_val = "secure_token_abc_xyz_789";
@@ -342,7 +342,7 @@ fn hack_test_duplicate_target_env_in_aliases_rejected() {
 /// access; it must detect the unapproved vault source key and require new consent.
 #[test]
 fn hack_test_tofu_blocks_swapped_vault_source_key() {
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dev_key = "TEST_VAULT_SWAP_DEV_KEY";
     let prod_key = "TEST_VAULT_SWAP_PROD_KEY";
 
@@ -386,7 +386,7 @@ fn hack_test_tofu_blocks_swapped_vault_source_key() {
 /// are injected completely intact and not mangled by the CLI spec splitting logic.
 #[test]
 fn hack_test_secret_value_with_equals_and_special_chars() {
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let vault_key = "TEST_VAULT_COMPLEX_URL_KEY";
     let complex_val =
         "postgres://admin:p@ss=w0rd==&token=abc=123#special@db.cluster.internal:5432/main?ssl=true";
@@ -431,7 +431,7 @@ fn hack_test_secret_value_with_equals_and_special_chars() {
 /// Tests that two different environment variables can cleanly draw from the same single vault secret.
 #[test]
 fn hack_test_multiple_aliases_pointing_to_same_vault_key() {
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let vault_key = "TEST_VAULT_SHARED_AI_TOKEN";
     let shared_val = "sk-shared-master-ai-token-456";
 
@@ -481,7 +481,7 @@ fn hack_test_multiple_aliases_pointing_to_same_vault_key() {
 /// When --no-redact is supplied, raw pass-through is honored.
 #[test]
 fn hack_test_dlp_secret_masking_on_stdout() {
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let vault_key = "TEST_VAULT_DLP_SECRET_KEY";
     let raw_secret = "ghp_super_confidential_production_token_999";
 
@@ -547,7 +547,7 @@ fn hack_test_dlp_secret_masking_on_stdout() {
 /// to permissions.json, forcing the user to be re-prompted on the subsequent execution.
 #[test]
 fn hack_test_allow_once_does_not_persist_grant() {
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let vault_key = "TEST_VAULT_ALLOW_ONCE_KEY";
     let raw_secret = "sk_ephemeral_token_once_789";
 
@@ -624,7 +624,7 @@ fn hack_test_allow_once_does_not_persist_grant() {
 /// return error -32001 to host stdout, and NEVER deliver the call to the child process.
 #[test]
 fn hack_test_layer7_tool_firewall_blocks_destructive_call() {
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     // A mock MCP server script that echoes incoming requests
     let server_script = r#"
@@ -708,7 +708,7 @@ fn hack_test_layer7_tool_firewall_blocks_destructive_call() {
 /// 3. Plaintext secret values are NEVER recorded in the audit log under any circumstances.
 #[test]
 fn hack_test_audit_logging_default_off_and_safe_capture() {
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let config_dir = std::env::temp_dir().join(format!(
         "mcp_sentinel_audit_test_{}",
@@ -838,7 +838,7 @@ fn hack_test_audit_logging_default_off_and_safe_capture() {
 /// return JSON-RPC errors for blocked items, and only forward permitted calls to the child.
 #[test]
 fn hack_test_layer7_tool_firewall_blocks_batch_requests() {
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let server_script = r#"
         const readline = require('readline');
@@ -954,7 +954,7 @@ fn hack_test_layer7_tool_firewall_blocks_batch_requests() {
 /// administrators must be able to securely pre-authorize servers via `permissions grant`.
 #[test]
 fn hack_test_permissions_grant_headless_preauth() {
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let vault_key = "TEST_VAULT_HEADLESS_KEY";
     let _ = mcp_sentinel::vault::set_secret(vault_key, "secret_value_123");
 
@@ -1024,7 +1024,7 @@ fn hack_test_permissions_grant_headless_preauth() {
 /// block destructive tool calls, return code -32001, and never send them to the child.
 #[test]
 fn hack_test_multiline_formatted_jsonrpc_firewall_blocks_destructive_call() {
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let server_script = r#"
         const readline = require('readline');
@@ -1130,7 +1130,7 @@ fn hack_test_secret_get_and_delete_blocks_internal_master_key() {
 /// HACK ATTACK 21: Migrate server with reserved prefix in name does not crash (BUG-03)
 #[test]
 fn hack_test_migrate_server_name_with_mcp_sentinel_prefix() {
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let input_json = r#"{
         "mcpServers": {
@@ -1170,7 +1170,7 @@ fn hack_test_migrate_server_name_with_mcp_sentinel_prefix() {
 #[test]
 fn hack_test_layer7_tool_firewall_blocks_malformed_name_call() {
     use std::io::Write;
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let server_script = r#"
         const readline = require('readline');
@@ -1233,7 +1233,7 @@ fn hack_test_layer7_tool_firewall_blocks_malformed_name_call() {
 #[test]
 fn hack_test_layer7_tool_firewall_blocks_unicode_homoglyphs_and_trojan_source() {
     use std::io::Write;
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let server_script = r#"
         const readline = require('readline');
@@ -1334,7 +1334,7 @@ fn hack_test_layer7_tool_firewall_blocks_unicode_homoglyphs_and_trojan_source() 
 #[test]
 fn hack_test_jsonrpc_stream_framing_integrity_on_interleaved_synthetic_error() {
     use std::io::Write;
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let server_script = r#"
         const readline = require('readline');
@@ -1431,7 +1431,7 @@ fn hack_test_jsonrpc_stream_framing_integrity_on_interleaved_synthetic_error() {
 #[test]
 fn hack_test_stdin_buffer_dos_protection() {
     use std::io::Write;
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let server_script = r#"
         const readline = require('readline');
@@ -1482,7 +1482,7 @@ fn hack_test_stdin_buffer_dos_protection() {
 #[test]
 fn test_stdin_buffer_custom_env_override() {
     use std::io::Write;
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let server_script = r#"
         const readline = require('readline');
@@ -1535,7 +1535,7 @@ fn test_stdin_buffer_custom_env_override() {
 /// A grant authorized under `--profile read-only` must be denied (re-prompting) if later run without profile or with a different profile.
 #[test]
 fn hack_test_tofu_profile_mismatch_requires_reauthorization() {
-    let _lock = POLICY_TEST_LOCK.lock().unwrap();
+    let _lock = POLICY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let temp_dir =
         std::env::temp_dir().join(format!("sentinel_test_profile_tofu_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&temp_dir);
