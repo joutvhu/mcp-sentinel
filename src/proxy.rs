@@ -161,10 +161,7 @@ pub async fn run_child_and_pipe(
     command.envs(&env_vars);
 
     #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
+    command.process_group(0);
 
     command
         .stdin(Stdio::piped())
