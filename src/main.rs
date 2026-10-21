@@ -730,6 +730,10 @@ async fn main() {
             }
         }
 
+        Commands::Kill { force } => {
+            kill_running_sentinel_processes(force);
+        }
+
         Commands::Migrate {
             target,
             file,
@@ -794,5 +798,123 @@ async fn main() {
                 );
             }
         }
+    }
+}
+
+/// Terminate all running mcp-sentinel processes (excluding the current process)
+fn kill_running_sentinel_processes(force: bool) {
+    let current_pid = std::process::id();
+    println!("🔍 Searching for running mcp-sentinel processes (current PID: {})...", current_pid);
+
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+
+        // Query tasklist for mcp-sentinel.exe processes with PID
+        let output = match Command::new("tasklist")
+            .args(["/FI", "IMAGENAME eq mcp-sentinel.exe", "/FO", "CSV", "/NH"])
+            .output()
+        {
+            Ok(out) => out,
+            Err(e) => {
+                eprintln!("Error querying process list: {}", e);
+                exit(1);
+            }
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut target_pids = Vec::new();
+
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split(',').map(|s| s.trim_matches('"')).collect();
+            if parts.len() >= 2 && parts[0].to_lowercase().contains("mcp-sentinel") {
+                if let Ok(pid) = parts[1].parse::<u32>() {
+                    if pid != current_pid {
+                        target_pids.push(pid);
+                    }
+                }
+            }
+        }
+
+        if target_pids.is_empty() {
+            println!("✓ No other running mcp-sentinel processes found.");
+            return;
+        }
+
+        println!("Terminating {} running mcp-sentinel process(es)...", target_pids.len());
+        for pid in target_pids {
+            let mut cmd = Command::new("taskkill");
+            if force {
+                cmd.args(["/F", "/PID", &pid.to_string()]);
+            } else {
+                cmd.args(["/PID", &pid.to_string()]);
+            }
+
+            match cmd.output() {
+                Ok(res) if res.status.success() => {
+                    println!("  ✓ Successfully stopped mcp-sentinel (PID {})", pid);
+                }
+                Ok(_) => {
+                    // If graceful stop failed, attempt force kill
+                    let _ = Command::new("taskkill")
+                        .args(["/F", "/PID", &pid.to_string()])
+                        .output();
+                    println!("  ✓ Forcefully stopped mcp-sentinel (PID {})", pid);
+                }
+                Err(e) => {
+                    eprintln!("  ❌ Failed to terminate PID {}: {}", pid, e);
+                }
+            }
+        }
+        println!("✅ All running mcp-sentinel processes terminated.");
+    }
+
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+
+        // Query pgrep for mcp-sentinel PIDs
+        let output = match Command::new("pgrep").args(["-x", "mcp-sentinel"]).output() {
+            Ok(out) => out,
+            Err(_) => {
+                // pgrep may not be installed or return non-zero when not found
+                println!("✓ No other running mcp-sentinel processes found.");
+                return;
+            }
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut target_pids = Vec::new();
+
+        for line in stdout.lines() {
+            if let Ok(pid) = line.trim().parse::<u32>() {
+                if pid != current_pid {
+                    target_pids.push(pid);
+                }
+            }
+        }
+
+        if target_pids.is_empty() {
+            println!("✓ No other running mcp-sentinel processes found.");
+            return;
+        }
+
+        println!("Terminating {} running mcp-sentinel process(es)...", target_pids.len());
+        let sig = if force { "-9" } else { "-15" };
+
+        for pid in target_pids {
+            let status = Command::new("kill").args([sig, &pid.to_string()]).status();
+            match status {
+                Ok(s) if s.success() => {
+                    println!("  ✓ Stopped mcp-sentinel (PID {})", pid);
+                }
+                _ => {
+                    // Try SIGKILL if SIGTERM failed
+                    let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+                    println!("  ✓ Forcefully stopped mcp-sentinel (PID {})", pid);
+                }
+            }
+        }
+        println!("✅ All running mcp-sentinel processes terminated.");
     }
 }

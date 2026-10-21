@@ -90,6 +90,14 @@ pub enum Commands {
     #[command(alias = "tui", alias = "dashboard")]
     Ui,
 
+    /// Terminate running mcp-sentinel proxy processes (useful before upgrades or to release file locks)
+    #[command(alias = "stop")]
+    Kill {
+        /// Force kill immediately without graceful termination
+        #[arg(short, long)]
+        force: bool,
+    },
+
     /// Migrate existing plaintext MCP configurations to Zero-Trust vault
     Migrate {
         /// Target application to migrate (claude, cursor, antigravity, kiro, codex, windsurf, cline, roo, vscode, continue, or all)
@@ -584,6 +592,13 @@ mod tests {
 
         let cli_dash = Cli::try_parse_from(["mcp-sentinel", "dashboard"]).unwrap();
         assert!(matches!(cli_dash.command, Commands::Ui));
+
+        // "kill", "stop"
+        let cli_kill = Cli::try_parse_from(["mcp-sentinel", "kill"]).unwrap();
+        assert!(matches!(cli_kill.command, Commands::Kill { force: false }));
+
+        let cli_stop = Cli::try_parse_from(["mcp-sentinel", "stop", "--force"]).unwrap();
+        assert!(matches!(cli_stop.command, Commands::Kill { force: true }));
     }
 
     #[test]

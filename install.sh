@@ -111,6 +111,14 @@ fi
 
 printf "\033[33mExtracting to %s...\033[0m\n" "$INSTALL_DIR"
 tar -xzf "$TMP_DIR/$ASSET_NAME" -C "$TMP_DIR"
+
+# Stop any running mcp-sentinel processes before replacing binary
+if pgrep -x "mcp-sentinel" >/dev/null 2>&1; then
+    printf "\033[33mStopping running mcp-sentinel process(es) before upgrade...\033[0m\n"
+    pkill -x "mcp-sentinel" 2>/dev/null || true
+    sleep 0.3
+fi
+
 mv "$TMP_DIR/$BIN_NAME" "$INSTALL_DIR/$BIN_NAME"
 chmod +x "$INSTALL_DIR/$BIN_NAME"
 

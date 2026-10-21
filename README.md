@@ -147,11 +147,17 @@ required**.
 
 ### 3. Upgrading
 
-To upgrade to the latest version, simply re-run the one-line install command or use your package manager:
+To upgrade to the latest version, re-run the one-line install command (which automatically stops running background instances before replacing the binary) or use your package manager.
+
+> 💡 **Tip for Windows & Cargo users**: If `mcp-sentinel` is currently active inside your IDEs (Claude Desktop, Cursor, etc.), run `mcp-sentinel kill` first to terminate background proxy workers and release executable file locks:
 
 ```bash
-brew upgrade mcp-sentinel             # Homebrew
-winget upgrade joutvhu.mcp-sentinel   # WinGet
+# Terminate background instances to prevent "Access is denied (os error 5)" on Windows
+mcp-sentinel kill
+
+# Upgrade via your preferred package manager
+brew upgrade mcp-sentinel             # Homebrew (macOS / Linux)
+winget upgrade joutvhu.mcp-sentinel   # WinGet (Windows)
 cargo install --force mcp-sentinel    # Cargo
 ```
 
@@ -578,6 +584,21 @@ mcp-sentinel ui
   * `[r]`: Reload from OS Vault, permissions, and tool profiles
   * `[x]`: Reset all permissions
   * `[q]`: Quit dashboard
+
+### `mcp-sentinel kill` (alias: `stop`)
+
+Terminate all running `mcp-sentinel` proxy processes. Ideal for stopping background workers before performing an upgrade (e.g., via `cargo install --force` or `winget upgrade`) to avoid Windows executable file locks (`Access is denied (os error 5)`).
+
+```bash
+# Gracefully stop all running background mcp-sentinel processes
+mcp-sentinel kill
+
+# Or force-kill immediately
+mcp-sentinel kill --force
+
+# Alias command:
+mcp-sentinel stop
+```
 
 ---
 

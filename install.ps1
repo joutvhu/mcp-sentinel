@@ -75,6 +75,14 @@ try {
     Write-Host "Notice: Checksum asset not found, skipping checksum verification." -ForegroundColor DarkGray
 }
 
+# Stop any running mcp-sentinel processes to release executable file locks
+$Running = Get-Process -Name "mcp-sentinel" -ErrorAction SilentlyContinue
+if ($Running) {
+    Write-Host "Stopping running mcp-sentinel process(es) before upgrade..." -ForegroundColor Yellow
+    $Running | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 400
+}
+
 Write-Host "Extracting binary..." -ForegroundColor Yellow
 Expand-Archive -Path $TempZip -DestinationPath $InstallDir -Force
 Remove-Item -Path $TempZip -Force

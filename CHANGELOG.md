@@ -67,6 +67,10 @@ This release introduces comprehensive Layer 7 tool call interception, automated 
   - Automated dual-release GitHub Actions CI/CD publishing both `mcp-sentinel` (Full with TUI) and `mcp-sentinel-headless` (Micro-binary).
   - One-line install scripts (`install.ps1`, `install.sh`) now support `-Headless` / `--headless`.
 
+- **Process Lifecycle Termination (`mcp-sentinel kill` / `stop`):**
+  - Added dedicated CLI command to discover and terminate all background proxy instances before upgrades, eliminating Windows executable file locks (`Access is denied (os error 5)`).
+  - Integrated pre-upgrade automatic process stopping into `install.ps1` and `install.sh`.
+
 ### 🛡️ Security Hardening & Bug Fixes
 
 - **JSON-RPC Batch Request Firewall**: Extended L7 firewall to recursively parse and validate JSON-RPC batch arrays, ensuring destructive calls cannot bypass policies via batch smuggling.
