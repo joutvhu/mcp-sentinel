@@ -559,7 +559,7 @@ pub async fn run_child_and_pipe(
         let _ = (&mut err_task).await;
     };
 
-    if tokio::time::timeout(std::time::Duration::from_millis(250), join_forwarding)
+    if tokio::time::timeout(std::time::Duration::from_millis(1500), join_forwarding)
         .await
         .is_err()
     {

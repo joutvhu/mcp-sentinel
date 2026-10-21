@@ -629,11 +629,12 @@ fn hack_test_layer7_tool_firewall_blocks_destructive_call() {
     // A mock MCP server script that echoes incoming requests
     let server_script = r#"
         const readline = require('readline');
-        const rl = readline.createInterface({ input: process.stdin });
+        const rl = readline.createInterface({ input: process.stdin, terminal: false });
         rl.on('line', (line) => {
             const req = JSON.parse(line);
             console.log(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: { executed: req.params.name } }));
         });
+        rl.on('close', () => process.exit(0));
     "#;
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
@@ -726,11 +727,12 @@ fn hack_test_audit_logging_default_off_and_safe_capture() {
 
     let server_script = r#"
         const readline = require('readline');
-        const rl = readline.createInterface({ input: process.stdin });
+        const rl = readline.createInterface({ input: process.stdin, terminal: false });
         rl.on('line', (line) => {
             const req = JSON.parse(line);
             console.log(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: { done: true } }));
         });
+        rl.on('close', () => process.exit(0));
     "#;
 
     // 1. Run WITHOUT --audit -> audit.log MUST NOT exist!
@@ -842,7 +844,7 @@ fn hack_test_layer7_tool_firewall_blocks_batch_requests() {
 
     let server_script = r#"
         const readline = require('readline');
-        const rl = readline.createInterface({ input: process.stdin });
+        const rl = readline.createInterface({ input: process.stdin, terminal: false });
         rl.on('line', (line) => {
             const parsed = JSON.parse(line);
             if (Array.isArray(parsed)) {
@@ -852,6 +854,7 @@ fn hack_test_layer7_tool_firewall_blocks_batch_requests() {
                 console.log(JSON.stringify({ jsonrpc: '2.0', id: parsed.id, result: { executed: parsed.params.name } }));
             }
         });
+        rl.on('close', () => process.exit(0));
     "#;
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
@@ -1028,7 +1031,7 @@ fn hack_test_multiline_formatted_jsonrpc_firewall_blocks_destructive_call() {
 
     let server_script = r#"
         const readline = require('readline');
-        const rl = readline.createInterface({ input: process.stdin });
+        const rl = readline.createInterface({ input: process.stdin, terminal: false });
         let buf = '';
         process.stdin.on('data', (chunk) => {
             buf += chunk.toString();
@@ -1038,6 +1041,7 @@ fn hack_test_multiline_formatted_jsonrpc_firewall_blocks_destructive_call() {
                 buf = '';
             } catch (e) {}
         });
+        process.stdin.on('end', () => process.exit(0));
     "#;
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
@@ -1174,10 +1178,11 @@ fn hack_test_layer7_tool_firewall_blocks_malformed_name_call() {
 
     let server_script = r#"
         const readline = require('readline');
-        const rl = readline.createInterface({ input: process.stdin });
+        const rl = readline.createInterface({ input: process.stdin, terminal: false });
         rl.on('line', (line) => {
             console.log(JSON.stringify({ jsonrpc: '2.0', id: 99, result: { executed: 'MALICIOUS_EXECUTION' } }));
         });
+        rl.on('close', () => process.exit(0));
     "#;
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
@@ -1237,10 +1242,11 @@ fn hack_test_layer7_tool_firewall_blocks_unicode_homoglyphs_and_trojan_source() 
 
     let server_script = r#"
         const readline = require('readline');
-        const rl = readline.createInterface({ input: process.stdin });
+        const rl = readline.createInterface({ input: process.stdin, terminal: false });
         rl.on('line', (line) => {
             console.log(JSON.stringify({ jsonrpc: '2.0', id: 99, result: { executed: 'HOMOGLYPH_BYPASS_EXECUTED' } }));
         });
+        rl.on('close', () => process.exit(0));
     "#;
 
     // Test 1: Cyrillic homoglyph 'е' (U+0435) in 'delete_database'
@@ -1346,10 +1352,11 @@ fn hack_test_jsonrpc_stream_framing_integrity_on_interleaved_synthetic_error() {
             process.stdout.write(',"completed":true}}\n');
         }, 200);
 
-        const rl = readline.createInterface({ input: process.stdin });
+        const rl = readline.createInterface({ input: process.stdin, terminal: false });
         rl.on('line', (line) => {
             // Should not receive blocked calls
         });
+        rl.on('close', () => process.exit(0));
     "#;
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
@@ -1435,8 +1442,9 @@ fn hack_test_stdin_buffer_dos_protection() {
 
     let server_script = r#"
         const readline = require('readline');
-        const rl = readline.createInterface({ input: process.stdin });
+        const rl = readline.createInterface({ input: process.stdin, terminal: false });
         rl.on('line', () => {});
+        rl.on('close', () => process.exit(0));
     "#;
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-sentinel"))
@@ -1486,8 +1494,9 @@ fn test_stdin_buffer_custom_env_override() {
 
     let server_script = r#"
         const readline = require('readline');
-        const rl = readline.createInterface({ input: process.stdin });
+        const rl = readline.createInterface({ input: process.stdin, terminal: false });
         rl.on('line', () => {});
+        rl.on('close', () => process.exit(0));
     "#;
 
     // Set custom limit to 1 MB (1048576 bytes)
